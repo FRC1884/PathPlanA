@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/FRC1884/PathPlanA/raw/main/vendor/pathplana_autos.schema.json",
+  "title": "PathPlanA Auto Package",
+  "type": "object",
+  "required": [
+    "autos"
+  ],
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "generator": {
+      "type": "string"
+    },
+    "autos": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/autoSpec"
+      }
+    }
+  },
+  "$defs": {
+    "pose": {
+      "type": "object",
+      "required": [
+        "xMeters",
+        "yMeters",
+        "headingDeg"
+      ],
+      "properties": {
+        "xMeters": {
+          "type": "number"
+        },
+        "yMeters": {
+          "type": "number"
+        },
+        "headingDeg": {
+          "type": "number"
+        }
+      }
+    },
+    "zone": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "xMinMeters",
+        "yMinMeters",
+        "xMaxMeters",
+        "yMaxMeters"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "xMinMeters": {
+          "type": "number"
+        },
+        "yMinMeters": {
+          "type": "number"
+        },
+        "xMaxMeters": {
+          "type": "number"
+        },
+        "yMaxMeters": {
+          "type": "number"
+        },
+        "locked": {
+          "type": "boolean"
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "label",
+        "requestedState"
+      ],
+      "properties": {
+        "spotId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "requestedState": {
+          "type": "string"
+        },
+        "xMeters": {
+          "type": "number"
+        },
+        "yMeters": {
+          "type": "number"
+        },
+        "headingDeg": {
+          "type": "number"
+        },
+        "constraintFactor": {
+          "type": "number"
+        },
+        "toleranceMeters": {
+          "type": "number"
+        },
+        "timeoutSeconds": {
+          "type": "number"
+        },
+        "endVelocityMps": {
+          "type": "number"
+        },
+        "stopOnEnd": {
+          "type": "boolean"
+        },
+        "routeWaypoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pose"
+          }
+        },
+        "plannerSettings": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "autoSpec": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "startPose",
+        "steps"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "number"
+        },
+        "startPose": {
+          "$ref": "#/$defs/pose"
+        },
+        "customZones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/zone"
+          }
+        },
+        "plannerSettings": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        }
+      }
+    }
+  }
+}
