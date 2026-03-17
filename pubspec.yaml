@@ -56,3 +56,4 @@ flutter:
     - assets/contracts/pathplana_autos.schema.json
     - assets/branding/pathplana_icon.svg
     - assets/field/rebuilt_field.svg
+    - assets/field/rebuilt_topdown.png

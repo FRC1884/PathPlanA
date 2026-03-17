@@ -7,8 +7,10 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 const double fieldLengthMeters = 17.548;
 const double fieldWidthMeters = 8.052;
+const double robotSideInches = 27.5;
+const double defaultRobotSizeMeters = robotSideInches * 0.0254;
 const String plannerIconAsset = 'assets/branding/pathplana_icon.svg';
-const String fieldBackgroundAsset = 'assets/field/rebuilt_field.svg';
+const String fieldBackgroundAsset = 'assets/field/rebuilt_topdown.png';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -649,8 +651,8 @@ class PlannerSettings {
     this.timeoutSeconds = 1.6,
     this.endVelocityMps = 1.2,
     this.controlRateHz = 50,
-    this.robotWidthMeters = 0.6985,
-    this.robotLengthMeters = 0.6985,
+    this.robotWidthMeters = defaultRobotSizeMeters,
+    this.robotLengthMeters = defaultRobotSizeMeters,
     this.allowReverse = false,
     this.holdHeading = true,
     this.previewSmoothing = 0.72,
@@ -745,9 +747,11 @@ class PlannerSettings {
       endVelocityMps: (align['endVelocityMps'] as num?)?.toDouble() ?? 1.2,
       controlRateHz: (planner['controlRateHz'] as num?)?.toDouble() ?? 50,
       robotWidthMeters:
-          (planner['robotWidthMeters'] as num?)?.toDouble() ?? 0.6985,
+          (planner['robotWidthMeters'] as num?)?.toDouble() ??
+          defaultRobotSizeMeters,
       robotLengthMeters:
-          (planner['robotLengthMeters'] as num?)?.toDouble() ?? 0.6985,
+          (planner['robotLengthMeters'] as num?)?.toDouble() ??
+          defaultRobotSizeMeters,
       allowReverse: planner['allowReverse'] as bool? ?? false,
       holdHeading: planner['holdHeading'] as bool? ?? true,
       previewSmoothing:
@@ -2842,14 +2846,26 @@ class _AutoGalleryCard extends StatelessWidget {
               const SizedBox(height: 10),
               SizedBox(
                 height: 90,
-                child: CustomPaint(
-                  painter: _FieldPreviewPainter(
-                    auto: auto,
-                    selectedStepIndex: null,
-                    mini: true,
-                    playbackProgress: 0,
-                  ),
-                  child: const SizedBox.expand(),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    Padding(
+                      padding: EdgeInsets.zero,
+                      child: Image.asset(
+                        fieldBackgroundAsset,
+                        fit: BoxFit.fill,
+                      ),
+                    ),
+                    CustomPaint(
+                      painter: _FieldPreviewPainter(
+                        auto: auto,
+                        selectedStepIndex: null,
+                        mini: true,
+                        playbackProgress: 0,
+                      ),
+                      child: const SizedBox.expand(),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -3016,11 +3032,8 @@ class _FieldEditor extends StatelessWidget {
               fit: StackFit.expand,
               children: <Widget>[
                 Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: SvgPicture.asset(
-                    fieldBackgroundAsset,
-                    fit: BoxFit.contain,
-                  ),
+                  padding: EdgeInsets.zero,
+                  child: Image.asset(fieldBackgroundAsset, fit: BoxFit.fill),
                 ),
                 CustomPaint(
                   painter: _FieldPreviewPainter(
@@ -3559,6 +3572,14 @@ class _SettingsPanel extends StatelessWidget {
               title: 'Robot Envelope',
               child: Column(
                 children: <Widget>[
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Default box: 27.5 in × 27.5 in = 0.6985 m × 0.6985 m',
+                      style: TextStyle(color: Color(0xFF94A0B8), fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   _LabeledSlider(
                     label: 'Robot Width Meters',
                     value: auto.settings.robotWidthMeters,
