@@ -277,6 +277,9 @@
         "name": {
           "type": "string"
         },
+        "folder": {
+          "type": "string"
+        },
         "updatedAt": {
           "type": "number"
         },

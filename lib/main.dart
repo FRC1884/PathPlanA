@@ -863,6 +863,7 @@ class PlannerAuto {
   const PlannerAuto({
     required this.id,
     required this.name,
+    required this.folder,
     required this.updatedAt,
     required this.startPose,
     required this.steps,
@@ -875,6 +876,7 @@ class PlannerAuto {
 
   final String id;
   final String name;
+  final String folder;
   final DateTime updatedAt;
   final PlannerPose startPose;
   final List<PlannerStep> steps;
@@ -887,6 +889,7 @@ class PlannerAuto {
   PlannerAuto copyWith({
     String? id,
     String? name,
+    String? folder,
     DateTime? updatedAt,
     PlannerPose? startPose,
     List<PlannerStep>? steps,
@@ -899,6 +902,7 @@ class PlannerAuto {
     return PlannerAuto(
       id: id ?? this.id,
       name: name ?? this.name,
+      folder: folder ?? this.folder,
       updatedAt: updatedAt ?? this.updatedAt,
       startPose: startPose ?? this.startPose,
       steps: steps ?? this.steps,
@@ -913,6 +917,7 @@ class PlannerAuto {
   Map<String, dynamic> toJson() => <String, dynamic>{
     'id': id,
     'name': name,
+    'folder': folder,
     'updatedAt': updatedAt.millisecondsSinceEpoch,
     'startPose': startPose.toJson(),
     'customZones': customZones.map((zone) => zone.toJson()).toList(),
@@ -927,6 +932,7 @@ class PlannerAuto {
     return PlannerAuto(
       id: json['id'] as String? ?? UniqueKey().toString(),
       name: json['name'] as String? ?? 'Imported Auto',
+      folder: json['folder'] as String? ?? 'Autos',
       updatedAt: DateTime.fromMillisecondsSinceEpoch(
         (json['updatedAt'] as num?)?.toInt() ??
             DateTime.now().millisecondsSinceEpoch,
@@ -974,6 +980,7 @@ class PlannerAuto {
     return PlannerAuto(
       id: 'hub-cycle-upper',
       name: 'Hub Cycle Upper',
+      folder: 'Cycle Autos',
       updatedAt: DateTime.now(),
       startPose: const PlannerPose(
         xMeters: 1.55,
@@ -1096,6 +1103,7 @@ class PlannerPackage {
         PlannerAuto.sample().copyWith(
           id: 'hub-cycle-lower',
           name: 'Hub Cycle Lower',
+          folder: 'Cycle Autos',
           startPose: const PlannerPose(
             xMeters: 1.1,
             yMeters: 1.08,
@@ -1173,6 +1181,20 @@ class PlannerPackage {
   }
 }
 
+class _PlannerWorkspaceSnapshot {
+  const _PlannerWorkspaceSnapshot({
+    required this.package,
+    required this.selectedAutoIndex,
+    required this.selectedStepIndex,
+    required this.selectedSection,
+  });
+
+  final PlannerPackage package;
+  final int selectedAutoIndex;
+  final int? selectedStepIndex;
+  final PlannerSection selectedSection;
+}
+
 class PlannerHomePage extends StatefulWidget {
   const PlannerHomePage({super.key});
 
@@ -1198,6 +1220,10 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   double _previewProgress = 0;
   String _statusMessage = 'Ready to author autos locally.';
   String _schemaSummary = 'Loading schema...';
+  final List<_PlannerWorkspaceSnapshot> _undoStack =
+      <_PlannerWorkspaceSnapshot>[];
+  final List<_PlannerWorkspaceSnapshot> _redoStack =
+      <_PlannerWorkspaceSnapshot>[];
 
   PlannerAuto get _selectedAuto => _package.autos[_selectedAutoIndex];
   List<PlannerCommandProfile> get _commandProfiles => _package.commandProfiles;
@@ -1255,6 +1281,83 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     return null;
   }
 
+  _PlannerWorkspaceSnapshot _createSnapshot() {
+    return _PlannerWorkspaceSnapshot(
+      package: PlannerPackage.fromJsonString(_package.prettyJson()),
+      selectedAutoIndex: _selectedAutoIndex,
+      selectedStepIndex: _selectedStepIndex,
+      selectedSection: _selectedSection,
+    );
+  }
+
+  void _pushUndoSnapshot() {
+    _undoStack.add(_createSnapshot());
+    if (_undoStack.length > 40) {
+      _undoStack.removeAt(0);
+    }
+    _redoStack.clear();
+  }
+
+  void _restoreSnapshot(_PlannerWorkspaceSnapshot snapshot, String message) {
+    setState(() {
+      _package = snapshot.package;
+      _selectedAutoIndex = math.min(
+        snapshot.selectedAutoIndex,
+        snapshot.package.autos.length - 1,
+      );
+      final int stepCount = _package.autos[_selectedAutoIndex].steps.length;
+      _selectedStepIndex = stepCount == 0 || snapshot.selectedStepIndex == null
+          ? null
+          : math.min(snapshot.selectedStepIndex!, stepCount - 1);
+      _selectedZoneIndex = _selectedAuto.customZones.isEmpty
+          ? null
+          : math.min(
+              _selectedZoneIndex ?? 0,
+              _selectedAuto.customZones.length - 1,
+            );
+      _selectedMarkerIndex = _selectedAuto.eventMarkers.isEmpty
+          ? null
+          : math.min(
+              _selectedMarkerIndex ?? 0,
+              _selectedAuto.eventMarkers.length - 1,
+            );
+      _selectedEventZoneIndex = _selectedAuto.eventZones.isEmpty
+          ? null
+          : math.min(
+              _selectedEventZoneIndex ?? 0,
+              _selectedAuto.eventZones.length - 1,
+            );
+      _selectedConstraintZoneIndex = _selectedAuto.constraintZones.isEmpty
+          ? null
+          : math.min(
+              _selectedConstraintZoneIndex ?? 0,
+              _selectedAuto.constraintZones.length - 1,
+            );
+      _selectedSection = snapshot.selectedSection;
+      _previewProgress = 0;
+      _previewPlaying = false;
+      _statusMessage = message;
+    });
+    _previewController.value = 0;
+    _configurePreviewAnimation();
+  }
+
+  void _undo() {
+    if (_undoStack.isEmpty) {
+      return;
+    }
+    _redoStack.add(_createSnapshot());
+    _restoreSnapshot(_undoStack.removeLast(), 'Undid last change.');
+  }
+
+  void _redo() {
+    if (_redoStack.isEmpty) {
+      return;
+    }
+    _undoStack.add(_createSnapshot());
+    _restoreSnapshot(_redoStack.removeLast(), 'Restored change.');
+  }
+
   void _configurePreviewAnimation() {
     final int milliseconds = math.max(
       400,
@@ -1308,6 +1411,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       });
       return;
     }
+    _pushUndoSnapshot();
     setState(() {
       _package = imported;
       _selectedAutoIndex = 0;
@@ -1361,10 +1465,12 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _createAuto() {
+    _pushUndoSnapshot();
     final DateTime now = DateTime.now();
     final PlannerAuto auto = PlannerAuto.sample().copyWith(
       id: 'auto-${now.millisecondsSinceEpoch}',
       name: 'New Auto ${_package.autos.length + 1}',
+      folder: 'Autos',
       updatedAt: now,
       steps: const <PlannerStep>[],
     );
@@ -1394,6 +1500,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     if (_package.autos.length == 1) {
       return;
     }
+    _pushUndoSnapshot();
     final List<PlannerAuto> autos = <PlannerAuto>[..._package.autos]
       ..removeAt(_selectedAutoIndex);
     setState(() {
@@ -1443,7 +1550,10 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     _configurePreviewAnimation();
   }
 
-  void _updateSelectedAuto(PlannerAuto nextAuto) {
+  void _updateSelectedAuto(PlannerAuto nextAuto, {bool recordHistory = true}) {
+    if (recordHistory) {
+      _pushUndoSnapshot();
+    }
     final List<PlannerAuto> autos = <PlannerAuto>[..._package.autos];
     autos[_selectedAutoIndex] = nextAuto.copyWith(updatedAt: DateTime.now());
     setState(() {
@@ -1534,6 +1644,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _updateCommandProfiles(List<PlannerCommandProfile> profiles) {
+    _pushUndoSnapshot();
     setState(() {
       _package = PlannerPackage(
         version: _package.version,
@@ -1550,6 +1661,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _addZone() {
+    _pushUndoSnapshot();
     final List<PlannerZone> zones = <PlannerZone>[
       ..._selectedAuto.customZones,
       PlannerZone(
@@ -1561,7 +1673,10 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         yMaxMeters: 3.2,
       ),
     ];
-    _updateSelectedAuto(_selectedAuto.copyWith(customZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(customZones: zones),
+      recordHistory: false,
+    );
     setState(() {
       _selectedZoneIndex = zones.length - 1;
       _selectedSection = PlannerSection.obstacles;
@@ -1570,15 +1685,23 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _updateZone(int index, PlannerZone zone) {
+    _pushUndoSnapshot();
     final List<PlannerZone> zones = <PlannerZone>[..._selectedAuto.customZones];
     zones[index] = zone;
-    _updateSelectedAuto(_selectedAuto.copyWith(customZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(customZones: zones),
+      recordHistory: false,
+    );
   }
 
   void _deleteZone(int index) {
+    _pushUndoSnapshot();
     final List<PlannerZone> zones = <PlannerZone>[..._selectedAuto.customZones]
       ..removeAt(index);
-    _updateSelectedAuto(_selectedAuto.copyWith(customZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(customZones: zones),
+      recordHistory: false,
+    );
     setState(() {
       _selectedZoneIndex = zones.isEmpty
           ? null
@@ -1587,6 +1710,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _addEventMarker() {
+    _pushUndoSnapshot();
     final List<PlannerEventMarker> markers = <PlannerEventMarker>[
       ..._selectedAuto.eventMarkers,
       PlannerEventMarker(
@@ -1596,7 +1720,10 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         commandId: _draftCommand.id,
       ),
     ];
-    _updateSelectedAuto(_selectedAuto.copyWith(eventMarkers: markers));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(eventMarkers: markers),
+      recordHistory: false,
+    );
     setState(() {
       _selectedMarkerIndex = markers.length - 1;
       _selectedSection = PlannerSection.events;
@@ -1604,18 +1731,26 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _updateEventMarker(int index, PlannerEventMarker marker) {
+    _pushUndoSnapshot();
     final List<PlannerEventMarker> markers = <PlannerEventMarker>[
       ..._selectedAuto.eventMarkers,
     ];
     markers[index] = marker;
-    _updateSelectedAuto(_selectedAuto.copyWith(eventMarkers: markers));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(eventMarkers: markers),
+      recordHistory: false,
+    );
   }
 
   void _deleteEventMarker(int index) {
+    _pushUndoSnapshot();
     final List<PlannerEventMarker> markers = <PlannerEventMarker>[
       ..._selectedAuto.eventMarkers,
     ]..removeAt(index);
-    _updateSelectedAuto(_selectedAuto.copyWith(eventMarkers: markers));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(eventMarkers: markers),
+      recordHistory: false,
+    );
     setState(() {
       _selectedMarkerIndex = markers.isEmpty
           ? null
@@ -1624,6 +1759,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _addEventZone() {
+    _pushUndoSnapshot();
     final List<PlannerEventZone> zones = <PlannerEventZone>[
       ..._selectedAuto.eventZones,
       PlannerEventZone(
@@ -1635,7 +1771,10 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         activeCommandId: _draftCommand.id,
       ),
     ];
-    _updateSelectedAuto(_selectedAuto.copyWith(eventZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(eventZones: zones),
+      recordHistory: false,
+    );
     setState(() {
       _selectedEventZoneIndex = zones.length - 1;
       _selectedSection = PlannerSection.events;
@@ -1643,18 +1782,26 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _updateEventZone(int index, PlannerEventZone zone) {
+    _pushUndoSnapshot();
     final List<PlannerEventZone> zones = <PlannerEventZone>[
       ..._selectedAuto.eventZones,
     ];
     zones[index] = zone;
-    _updateSelectedAuto(_selectedAuto.copyWith(eventZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(eventZones: zones),
+      recordHistory: false,
+    );
   }
 
   void _deleteEventZone(int index) {
+    _pushUndoSnapshot();
     final List<PlannerEventZone> zones = <PlannerEventZone>[
       ..._selectedAuto.eventZones,
     ]..removeAt(index);
-    _updateSelectedAuto(_selectedAuto.copyWith(eventZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(eventZones: zones),
+      recordHistory: false,
+    );
     setState(() {
       _selectedEventZoneIndex = zones.isEmpty
           ? null
@@ -1663,6 +1810,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _addConstraintZone() {
+    _pushUndoSnapshot();
     final List<PlannerConstraintZone> zones = <PlannerConstraintZone>[
       ..._selectedAuto.constraintZones,
       PlannerConstraintZone(
@@ -1672,7 +1820,10 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         endProgress: 0.85,
       ),
     ];
-    _updateSelectedAuto(_selectedAuto.copyWith(constraintZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(constraintZones: zones),
+      recordHistory: false,
+    );
     setState(() {
       _selectedConstraintZoneIndex = zones.length - 1;
       _selectedSection = PlannerSection.constraints;
@@ -1680,18 +1831,26 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   }
 
   void _updateConstraintZone(int index, PlannerConstraintZone zone) {
+    _pushUndoSnapshot();
     final List<PlannerConstraintZone> zones = <PlannerConstraintZone>[
       ..._selectedAuto.constraintZones,
     ];
     zones[index] = zone;
-    _updateSelectedAuto(_selectedAuto.copyWith(constraintZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(constraintZones: zones),
+      recordHistory: false,
+    );
   }
 
   void _deleteConstraintZone(int index) {
+    _pushUndoSnapshot();
     final List<PlannerConstraintZone> zones = <PlannerConstraintZone>[
       ..._selectedAuto.constraintZones,
     ]..removeAt(index);
-    _updateSelectedAuto(_selectedAuto.copyWith(constraintZones: zones));
+    _updateSelectedAuto(
+      _selectedAuto.copyWith(constraintZones: zones),
+      recordHistory: false,
+    );
     setState(() {
       _selectedConstraintZoneIndex = zones.isEmpty
           ? null
@@ -1816,6 +1975,8 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                     onDeleteSelectedAuto: _deleteSelectedAuto,
                   ),
                   _EditorSection(
+                    autos: _package.autos,
+                    selectedAutoIndex: _selectedAutoIndex,
                     auto: _selectedAuto,
                     commandProfiles: _commandProfiles,
                     selectedStepIndex: _selectedStepIndex,
@@ -1831,8 +1992,32 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                         setState(() => _draftCommandId = value),
                     onHeadingChanged: (double value) =>
                         setState(() => _draftHeadingDeg = value),
+                    onUndo: _undo,
+                    onRedo: _redo,
+                    canUndo: _undoStack.isNotEmpty,
+                    canRedo: _redoStack.isNotEmpty,
+                    onAddEventMarker: _addEventMarker,
+                    onAddEventZone: _addEventZone,
+                    onAddConstraintZone: _addConstraintZone,
+                    onAddObstacleZone: _addZone,
                     onTogglePlayback: _togglePreviewPlayback,
                     onPlaybackScrub: _setPreviewProgress,
+                    onSelectAutoFromBrowser: _selectAuto,
+                    onOpenEvents: () => setState(
+                      () => _selectedSection = PlannerSection.events,
+                    ),
+                    onOpenConstraints: () => setState(
+                      () => _selectedSection = PlannerSection.constraints,
+                    ),
+                    onOpenObstacles: () => setState(
+                      () => _selectedSection = PlannerSection.obstacles,
+                    ),
+                    onOpenCommands: () => setState(
+                      () => _selectedSection = PlannerSection.commands,
+                    ),
+                    onOpenSettings: () => setState(
+                      () => _selectedSection = PlannerSection.settings,
+                    ),
                     onTap: _handleCanvasTap,
                     onSelectStep: (int index) =>
                         setState(() => _selectedStepIndex = index),
@@ -1846,6 +2031,26 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                             ? null
                             : math.min(index, steps.length - 1);
                       });
+                    },
+                    onRenameAuto: (String value) => _updateSelectedAuto(
+                      _selectedAuto.copyWith(name: value),
+                    ),
+                    onFolderChanged: (String value) => _updateSelectedAuto(
+                      _selectedAuto.copyWith(folder: value),
+                    ),
+                    onUpdateSettings: (PlannerSettings settings) =>
+                        _updateSelectedAuto(
+                          _selectedAuto.copyWith(settings: settings),
+                        ),
+                    onUpdateStep: (PlannerStep step) {
+                      if (_selectedStepIndex == null) {
+                        return;
+                      }
+                      final List<PlannerStep> steps = <PlannerStep>[
+                        ..._selectedAuto.steps,
+                      ];
+                      steps[_selectedStepIndex!] = step;
+                      _updateSelectedAuto(_selectedAuto.copyWith(steps: steps));
                     },
                   ),
                   _EventsSection(
@@ -1937,6 +2142,9 @@ class _LibrarySection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final Set<String> folders = package.autos
+        .map((PlannerAuto auto) => auto.folder)
+        .toSet();
     return Column(
       children: <Widget>[
         Row(
@@ -1988,6 +2196,22 @@ class _LibrarySection extends StatelessWidget {
                                 fontSize: 12,
                               ),
                             ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: folders
+                                  .map(
+                                    (String folder) => Chip(
+                                      label: Text(folder),
+                                      backgroundColor: const Color(0xFF151C28),
+                                      side: const BorderSide(
+                                        color: Color(0xFF273246),
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
                           ],
                         ),
                       ),
@@ -2031,6 +2255,8 @@ class _LibrarySection extends StatelessWidget {
 
 class _EditorSection extends StatelessWidget {
   const _EditorSection({
+    required this.autos,
+    required this.selectedAutoIndex,
     required this.auto,
     required this.commandProfiles,
     required this.selectedStepIndex,
@@ -2043,13 +2269,33 @@ class _EditorSection extends StatelessWidget {
     required this.onToolChanged,
     required this.onDraftCommandChanged,
     required this.onHeadingChanged,
+    required this.onUndo,
+    required this.onRedo,
+    required this.canUndo,
+    required this.canRedo,
+    required this.onAddEventMarker,
+    required this.onAddEventZone,
+    required this.onAddConstraintZone,
+    required this.onAddObstacleZone,
     required this.onTogglePlayback,
     required this.onPlaybackScrub,
+    required this.onSelectAutoFromBrowser,
+    required this.onOpenEvents,
+    required this.onOpenConstraints,
+    required this.onOpenObstacles,
+    required this.onOpenCommands,
+    required this.onOpenSettings,
     required this.onTap,
     required this.onSelectStep,
     required this.onDeleteStep,
+    required this.onRenameAuto,
+    required this.onFolderChanged,
+    required this.onUpdateSettings,
+    required this.onUpdateStep,
   });
 
+  final List<PlannerAuto> autos;
+  final int selectedAutoIndex;
   final PlannerAuto auto;
   final List<PlannerCommandProfile> commandProfiles;
   final int? selectedStepIndex;
@@ -2062,137 +2308,199 @@ class _EditorSection extends StatelessWidget {
   final ValueChanged<PlannerTool> onToolChanged;
   final ValueChanged<String> onDraftCommandChanged;
   final ValueChanged<double> onHeadingChanged;
+  final VoidCallback onUndo;
+  final VoidCallback onRedo;
+  final bool canUndo;
+  final bool canRedo;
+  final VoidCallback onAddEventMarker;
+  final VoidCallback onAddEventZone;
+  final VoidCallback onAddConstraintZone;
+  final VoidCallback onAddObstacleZone;
   final VoidCallback onTogglePlayback;
   final ValueChanged<double> onPlaybackScrub;
+  final ValueChanged<int> onSelectAutoFromBrowser;
+  final VoidCallback onOpenEvents;
+  final VoidCallback onOpenConstraints;
+  final VoidCallback onOpenObstacles;
+  final VoidCallback onOpenCommands;
+  final VoidCallback onOpenSettings;
   final ValueChanged<Offset> onTap;
   final ValueChanged<int> onSelectStep;
   final ValueChanged<int> onDeleteStep;
+  final ValueChanged<String> onRenameAuto;
+  final ValueChanged<String> onFolderChanged;
+  final ValueChanged<PlannerSettings> onUpdateSettings;
+  final ValueChanged<PlannerStep> onUpdateStep;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return Row(
       children: <Widget>[
-        _ToolStrip(
-          tool: tool,
-          commandProfiles: commandProfiles,
-          draftCommandId: draftCommandId,
-          draftHeadingDeg: draftHeadingDeg,
-          onToolChanged: onToolChanged,
-          onDraftCommandChanged: onDraftCommandChanged,
-          onHeadingChanged: onHeadingChanged,
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    _MetricChip(
-                      label: 'ETA',
-                      value: formatDurationSeconds(estimatedTimeSeconds),
-                    ),
-                    const SizedBox(width: 10),
-                    _MetricChip(
-                      label: 'Distance',
-                      value:
-                          '${computeAutoDistanceMeters(auto).toStringAsFixed(2)} m',
-                    ),
-                    const SizedBox(width: 10),
-                    _MetricChip(
-                      label: 'Commands',
-                      value:
-                          '${auto.eventMarkers.length + auto.eventZones.length}',
-                    ),
-                    const Spacer(),
-                    FilledButton.icon(
-                      onPressed: onTogglePlayback,
-                      icon: Icon(
-                        previewPlaying ? Icons.pause : Icons.play_arrow,
-                      ),
-                      label: Text(previewPlaying ? 'Pause' : 'Animate'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: <Widget>[
-                    const Text(
-                      'Path Preview',
-                      style: TextStyle(color: Color(0xFF94A0B8)),
-                    ),
-                    Expanded(
-                      child: Slider(
-                        value: playbackProgress.clamp(0.0, 1.0),
-                        onChanged: onPlaybackScrub,
-                      ),
-                    ),
-                    Text(
-                      '${(playbackProgress * 100).round()}%',
-                      style: const TextStyle(color: Color(0xFF94A0B8)),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+        SizedBox(
+          width: 270,
+          child: _ProjectSidebar(
+            autos: autos,
+            selectedAutoIndex: selectedAutoIndex,
+            auto: auto,
+            commandProfiles: commandProfiles,
+            onSelectAuto: onSelectAutoFromBrowser,
+            onOpenEvents: onOpenEvents,
+            onOpenConstraints: onOpenConstraints,
+            onOpenObstacles: onOpenObstacles,
+            onOpenCommands: onOpenCommands,
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(width: 12),
         Expanded(
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Row(
+          child: Column(
+            children: <Widget>[
+              _ToolStrip(
+                tool: tool,
+                commandProfiles: commandProfiles,
+                draftCommandId: draftCommandId,
+                draftHeadingDeg: draftHeadingDeg,
+                onToolChanged: onToolChanged,
+                onDraftCommandChanged: onDraftCommandChanged,
+                onHeadingChanged: onHeadingChanged,
+                onUndo: onUndo,
+                onRedo: onRedo,
+                canUndo: canUndo,
+                canRedo: canRedo,
+                onAddEventMarker: onAddEventMarker,
+                onAddEventZone: onAddEventZone,
+                onAddConstraintZone: onAddConstraintZone,
+                onAddObstacleZone: onAddObstacleZone,
+              ),
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
                     children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          auto.name,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w900,
+                      Row(
+                        children: <Widget>[
+                          _MetricChip(
+                            label: 'ETA',
+                            value: formatDurationSeconds(estimatedTimeSeconds),
                           ),
-                        ),
+                          const SizedBox(width: 10),
+                          _MetricChip(
+                            label: 'Distance',
+                            value:
+                                '${computeAutoDistanceMeters(auto).toStringAsFixed(2)} m',
+                          ),
+                          const SizedBox(width: 10),
+                          _MetricChip(
+                            label: 'Commands',
+                            value:
+                                '${auto.eventMarkers.length + auto.eventZones.length}',
+                          ),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: onTogglePlayback,
+                            icon: Icon(
+                              previewPlaying ? Icons.pause : Icons.play_arrow,
+                            ),
+                            label: Text(previewPlaying ? 'Pause' : 'Animate'),
+                          ),
+                        ],
                       ),
-                      Text(
-                        '${auto.steps.length} steps',
-                        style: const TextStyle(color: Color(0xFF94A0B8)),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: <Widget>[
+                          const Text(
+                            'Path Preview',
+                            style: TextStyle(color: Color(0xFF94A0B8)),
+                          ),
+                          Expanded(
+                            child: Slider(
+                              value: playbackProgress.clamp(0.0, 1.0),
+                              onChanged: onPlaybackScrub,
+                            ),
+                          ),
+                          Text(
+                            '${(playbackProgress * 100).round()}%',
+                            style: const TextStyle(color: Color(0xFF94A0B8)),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: Row(
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Expanded(
-                          flex: 5,
-                          child: _FieldEditor(
-                            auto: auto,
-                            selectedStepIndex: selectedStepIndex,
-                            playbackProgress: playbackProgress,
-                            onTap: onTap,
-                          ),
+                        Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: Text(
+                                auto.name,
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              '${auto.steps.length} steps',
+                              style: const TextStyle(color: Color(0xFF94A0B8)),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(height: 12),
                         Expanded(
-                          flex: 3,
-                          child: _StepListPanel(
-                            auto: auto,
-                            commandProfiles: commandProfiles,
-                            selectedStepIndex: selectedStepIndex,
-                            onSelectStep: onSelectStep,
-                            onDeleteStep: onDeleteStep,
+                          child: Row(
+                            children: <Widget>[
+                              Expanded(
+                                flex: 6,
+                                child: _FieldEditor(
+                                  auto: auto,
+                                  selectedStepIndex: selectedStepIndex,
+                                  playbackProgress: playbackProgress,
+                                  onTap: onTap,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                flex: 4,
+                                child: _StepListPanel(
+                                  auto: auto,
+                                  commandProfiles: commandProfiles,
+                                  selectedStepIndex: selectedStepIndex,
+                                  onSelectStep: onSelectStep,
+                                  onDeleteStep: onDeleteStep,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
                   ),
-                ],
+                ),
               ),
-            ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 350,
+          child: _EditorInspector(
+            auto: auto,
+            commandProfiles: commandProfiles,
+            selectedStepIndex: selectedStepIndex,
+            estimatedTimeSeconds: estimatedTimeSeconds,
+            onRenameAuto: onRenameAuto,
+            onFolderChanged: onFolderChanged,
+            onUpdateSettings: onUpdateSettings,
+            onUpdateStep: onUpdateStep,
+            onOpenSettings: onOpenSettings,
           ),
         ),
       ],
@@ -2229,6 +2537,487 @@ class _MetricChip extends StatelessWidget {
           const SizedBox(height: 2),
           Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
         ],
+      ),
+    );
+  }
+}
+
+class _ProjectSidebar extends StatelessWidget {
+  const _ProjectSidebar({
+    required this.autos,
+    required this.selectedAutoIndex,
+    required this.auto,
+    required this.commandProfiles,
+    required this.onSelectAuto,
+    required this.onOpenEvents,
+    required this.onOpenConstraints,
+    required this.onOpenObstacles,
+    required this.onOpenCommands,
+  });
+
+  final List<PlannerAuto> autos;
+  final int selectedAutoIndex;
+  final PlannerAuto auto;
+  final List<PlannerCommandProfile> commandProfiles;
+  final ValueChanged<int> onSelectAuto;
+  final VoidCallback onOpenEvents;
+  final VoidCallback onOpenConstraints;
+  final VoidCallback onOpenObstacles;
+  final VoidCallback onOpenCommands;
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, List<MapEntry<int, PlannerAuto>>> autosByFolder =
+        <String, List<MapEntry<int, PlannerAuto>>>{};
+    for (int index = 0; index < autos.length; index += 1) {
+      final PlannerAuto entry = autos[index];
+      autosByFolder
+          .putIfAbsent(entry.folder, () => <MapEntry<int, PlannerAuto>>[])
+          .add(MapEntry<int, PlannerAuto>(index, entry));
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text(
+              'Project Browser',
+              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Autos',
+              style: TextStyle(color: Color(0xFF94A0B8), fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView(
+                children: autosByFolder.entries.map((entry) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          entry.key,
+                          style: const TextStyle(
+                            color: Color(0xFFFFD166),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        ...entry.value.map((autoEntry) {
+                          final bool selected =
+                              autoEntry.key == selectedAutoIndex;
+                          final PlannerAuto plannedAuto = autoEntry.value;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Material(
+                              color: selected
+                                  ? const Color(0x1A39D98A)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(14),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: () => onSelectAuto(autoEntry.key),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(10),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: <Widget>[
+                                      Text(
+                                        plannedAuto.name,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        '${plannedAuto.steps.length} steps • ${plannedAuto.eventMarkers.length} markers',
+                                        style: const TextStyle(
+                                          color: Color(0xFF94A0B8),
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Assets',
+              style: TextStyle(color: Color(0xFF94A0B8), fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            _BrowserLinkTile(
+              icon: Icons.bolt,
+              title: 'Events',
+              subtitle:
+                  '${auto.eventMarkers.length} markers • ${auto.eventZones.length} zones',
+              onTap: onOpenEvents,
+            ),
+            const SizedBox(height: 8),
+            _BrowserLinkTile(
+              icon: Icons.speed,
+              title: 'Constraint Zones',
+              subtitle: '${auto.constraintZones.length} active overrides',
+              onTap: onOpenConstraints,
+            ),
+            const SizedBox(height: 8),
+            _BrowserLinkTile(
+              icon: Icons.tune,
+              title: 'Named Commands',
+              subtitle: '${commandProfiles.length} command profiles',
+              onTap: onOpenCommands,
+            ),
+            const SizedBox(height: 8),
+            _BrowserLinkTile(
+              icon: Icons.crop_square,
+              title: 'Obstacles',
+              subtitle: '${auto.customZones.length} keep-out boxes',
+              onTap: onOpenObstacles,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BrowserLinkTile extends StatelessWidget {
+  const _BrowserLinkTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF151C28),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            children: <Widget>[
+              Icon(icon, color: const Color(0xFFFFD166)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0xFF94A0B8),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EditorInspector extends StatelessWidget {
+  const _EditorInspector({
+    required this.auto,
+    required this.commandProfiles,
+    required this.selectedStepIndex,
+    required this.estimatedTimeSeconds,
+    required this.onRenameAuto,
+    required this.onFolderChanged,
+    required this.onUpdateSettings,
+    required this.onUpdateStep,
+    required this.onOpenSettings,
+  });
+
+  final PlannerAuto auto;
+  final List<PlannerCommandProfile> commandProfiles;
+  final int? selectedStepIndex;
+  final double estimatedTimeSeconds;
+  final ValueChanged<String> onRenameAuto;
+  final ValueChanged<String> onFolderChanged;
+  final ValueChanged<PlannerSettings> onUpdateSettings;
+  final ValueChanged<PlannerStep> onUpdateStep;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final PlannerStep? selectedStep = selectedStepIndex == null
+        ? null
+        : auto.steps[selectedStepIndex!];
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: ListView(
+          children: <Widget>[
+            const Text(
+              'Inspector',
+              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
+            ),
+            const SizedBox(height: 12),
+            if (selectedStep == null) ...<Widget>[
+              TextFormField(
+                initialValue: auto.name,
+                decoration: const InputDecoration(labelText: 'Auto Name'),
+                onChanged: onRenameAuto,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                initialValue: auto.folder,
+                decoration: const InputDecoration(labelText: 'Folder'),
+                onChanged: (String value) =>
+                    onFolderChanged(value.isEmpty ? 'Autos' : value),
+              ),
+              const SizedBox(height: 12),
+              _MetricChip(
+                label: 'Estimated Runtime',
+                value: formatDurationSeconds(estimatedTimeSeconds),
+              ),
+              const SizedBox(height: 10),
+              _MetricChip(
+                label: 'Path Distance',
+                value:
+                    '${computeAutoDistanceMeters(auto).toStringAsFixed(2)} m',
+              ),
+              const SizedBox(height: 10),
+              _MetricChip(
+                label: 'Behavior Assets',
+                value:
+                    '${auto.eventMarkers.length} markers / ${auto.eventZones.length} zones / ${auto.constraintZones.length} constraints',
+              ),
+              const SizedBox(height: 14),
+              _SettingsSection(
+                title: 'Quick Dynamics',
+                child: Column(
+                  children: <Widget>[
+                    _LabeledSlider(
+                      label: 'Constraint Factor',
+                      value: auto.settings.constraintFactor,
+                      min: 0.3,
+                      max: 1.4,
+                      onChanged: (double value) => onUpdateSettings(
+                        auto.settings.copyWith(constraintFactor: value),
+                      ),
+                    ),
+                    _LabeledSlider(
+                      label: 'Max Velocity MPS',
+                      value: auto.settings.maxVelocityMps,
+                      min: 0.5,
+                      max: 6.0,
+                      onChanged: (double value) => onUpdateSettings(
+                        auto.settings.copyWith(maxVelocityMps: value),
+                      ),
+                    ),
+                    _LabeledSlider(
+                      label: 'Max Accel MPS²',
+                      value: auto.settings.maxAccelerationMpsSq,
+                      min: 0.5,
+                      max: 6.0,
+                      onChanged: (double value) => onUpdateSettings(
+                        auto.settings.copyWith(maxAccelerationMpsSq: value),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _SettingsSection(
+                title: 'Start Pose',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('X ${auto.startPose.xMeters.toStringAsFixed(2)} m'),
+                    Text('Y ${auto.startPose.yMeters.toStringAsFixed(2)} m'),
+                    Text(
+                      'Heading ${auto.startPose.headingDeg.toStringAsFixed(0)}°',
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: onOpenSettings,
+                child: const Text('Open Full Settings'),
+              ),
+            ] else ...<Widget>[
+              const Text(
+                'Selected Step',
+                style: TextStyle(color: Color(0xFF94A0B8), fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                initialValue: selectedStep.label,
+                decoration: const InputDecoration(labelText: 'Step Label'),
+                onChanged: (String value) =>
+                    onUpdateStep(selectedStep.copyWith(label: value)),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: selectedStep.commandId.isNotEmpty
+                    ? selectedStep.commandId
+                    : commandProfiles.first.id,
+                decoration: const InputDecoration(labelText: 'Named Command'),
+                items: commandProfiles
+                    .map(
+                      (PlannerCommandProfile profile) =>
+                          DropdownMenuItem<String>(
+                            value: profile.id,
+                            child: Text(
+                              '${profile.name} → ${profile.requestedState}',
+                            ),
+                          ),
+                    )
+                    .toList(),
+                onChanged: (String? commandId) {
+                  if (commandId == null) {
+                    return;
+                  }
+                  final PlannerCommandProfile profile = commandProfiles
+                      .firstWhere(
+                        (PlannerCommandProfile entry) => entry.id == commandId,
+                        orElse: () => commandProfiles.first,
+                      );
+                  onUpdateStep(
+                    selectedStep.copyWith(
+                      commandId: profile.id,
+                      commandName: profile.name,
+                      requestedState: RequestedState.fromToken(
+                        profile.requestedState,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+              _LabeledSlider(
+                label: 'Wait Seconds',
+                value: selectedStep.waitSeconds,
+                min: 0,
+                max: 3,
+                onChanged: (double value) =>
+                    onUpdateStep(selectedStep.copyWith(waitSeconds: value)),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: selectedStep.pose.xMeters.toStringAsFixed(
+                        2,
+                      ),
+                      decoration: const InputDecoration(labelText: 'X'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        signed: true,
+                        decimal: true,
+                      ),
+                      onChanged: (String value) => onUpdateStep(
+                        selectedStep.copyWith(
+                          pose: selectedStep.pose.copyWith(
+                            xMeters:
+                                double.tryParse(value) ??
+                                selectedStep.pose.xMeters,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: selectedStep.pose.yMeters.toStringAsFixed(
+                        2,
+                      ),
+                      decoration: const InputDecoration(labelText: 'Y'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        signed: true,
+                        decimal: true,
+                      ),
+                      onChanged: (String value) => onUpdateStep(
+                        selectedStep.copyWith(
+                          pose: selectedStep.pose.copyWith(
+                            yMeters:
+                                double.tryParse(value) ??
+                                selectedStep.pose.yMeters,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                initialValue: selectedStep.pose.headingDeg.toStringAsFixed(0),
+                decoration: const InputDecoration(labelText: 'Heading'),
+                keyboardType: const TextInputType.numberWithOptions(
+                  signed: true,
+                  decimal: true,
+                ),
+                onChanged: (String value) => onUpdateStep(
+                  selectedStep.copyWith(
+                    pose: selectedStep.pose.copyWith(
+                      headingDeg:
+                          double.tryParse(value) ??
+                          selectedStep.pose.headingDeg,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              _SettingsSection(
+                title: 'Pose Summary',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('X ${selectedStep.pose.xMeters.toStringAsFixed(2)} m'),
+                    Text('Y ${selectedStep.pose.yMeters.toStringAsFixed(2)} m'),
+                    Text(
+                      'Heading ${selectedStep.pose.headingDeg.toStringAsFixed(0)}°',
+                    ),
+                    Text('Waypoints ${selectedStep.routeWaypoints.length}'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: onOpenSettings,
+                child: const Text('Open Full Properties'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -2840,6 +3629,15 @@ class _AutoGalleryCard extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
+                auto.folder,
+                style: const TextStyle(
+                  color: Color(0xFFFFD166),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
                 '${auto.steps.length} steps • ${auto.updatedAt.hour.toString().padLeft(2, '0')}:${auto.updatedAt.minute.toString().padLeft(2, '0')}',
                 style: const TextStyle(color: Color(0xFF94A0B8), fontSize: 12),
               ),
@@ -2885,6 +3683,14 @@ class _ToolStrip extends StatelessWidget {
     required this.onToolChanged,
     required this.onDraftCommandChanged,
     required this.onHeadingChanged,
+    required this.onUndo,
+    required this.onRedo,
+    required this.canUndo,
+    required this.canRedo,
+    required this.onAddEventMarker,
+    required this.onAddEventZone,
+    required this.onAddConstraintZone,
+    required this.onAddObstacleZone,
   });
 
   final PlannerTool tool;
@@ -2894,6 +3700,14 @@ class _ToolStrip extends StatelessWidget {
   final ValueChanged<PlannerTool> onToolChanged;
   final ValueChanged<String> onDraftCommandChanged;
   final ValueChanged<double> onHeadingChanged;
+  final VoidCallback onUndo;
+  final VoidCallback onRedo;
+  final bool canUndo;
+  final bool canRedo;
+  final VoidCallback onAddEventMarker;
+  final VoidCallback onAddEventZone;
+  final VoidCallback onAddConstraintZone;
+  final VoidCallback onAddObstacleZone;
 
   @override
   Widget build(BuildContext context) {
@@ -2905,6 +3719,17 @@ class _ToolStrip extends StatelessWidget {
           runSpacing: 10,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
+            FilledButton.tonalIcon(
+              onPressed: canUndo ? onUndo : null,
+              icon: const Icon(Icons.undo),
+              label: const Text('Undo'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: canRedo ? onRedo : null,
+              icon: const Icon(Icons.redo),
+              label: const Text('Redo'),
+            ),
+            const SizedBox(width: 6),
             _ToolButton(
               label: 'Select',
               active: tool == PlannerTool.select,
@@ -2924,6 +3749,27 @@ class _ToolStrip extends StatelessWidget {
               label: 'Add Waypoint',
               active: tool == PlannerTool.addWaypoint,
               onTap: () => onToolChanged(PlannerTool.addWaypoint),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.tonalIcon(
+              onPressed: onAddEventMarker,
+              icon: const Icon(Icons.add_circle_outline),
+              label: const Text('Marker'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: onAddEventZone,
+              icon: const Icon(Icons.linear_scale),
+              label: const Text('Event Zone'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: onAddConstraintZone,
+              icon: const Icon(Icons.speed),
+              label: const Text('Constraint'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: onAddObstacleZone,
+              icon: const Icon(Icons.crop_square),
+              label: const Text('Obstacle'),
             ),
             const SizedBox(width: 8),
             DropdownButton<String>(
