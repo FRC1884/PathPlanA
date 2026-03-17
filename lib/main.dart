@@ -2191,6 +2191,27 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     });
   }
 
+  void _setStatus(String message, {bool notify = true}) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _statusMessage = message;
+    });
+    if (!notify) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+    });
+  }
+
   Future<void> _loadPersistedWorkspace() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String? deployDirectory = prefs.getString(_deployDirectoryPrefsKey);
@@ -2398,14 +2419,14 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       ],
     );
     if (file == null) {
+      _setStatus('Import canceled.');
       return;
     }
-    final String contents = await file.readAsString();
-    final PlannerPackage imported = PlannerPackage.fromJsonString(contents);
+    try {
+      final String contents = await file.readAsString();
+      final PlannerPackage imported = PlannerPackage.fromJsonString(contents);
     if (imported.autos.isEmpty) {
-      setState(() {
-        _statusMessage = 'Import skipped. No autos found.';
-      });
+      _setStatus('Import skipped. No autos found.');
       return;
     }
     _pushUndoSnapshot();
@@ -2435,10 +2456,17 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     _previewController.value = 0;
     _configurePreviewAnimation();
     _persistWorkspace();
+    _setStatus(
+      'Imported ${imported.autos.length} auto${imported.autos.length == 1 ? '' : 's'} from ${file.name}.',
+    );
+    } catch (error) {
+      _setStatus('Import failed: $error');
+    }
   }
 
   Future<void> _exportPackage() async {
-    final FileSaveLocation? location = await getSaveLocation(
+    try {
+      final FileSaveLocation? location = await getSaveLocation(
       suggestedName: 'pathplana_autos.json',
       acceptedTypeGroups: const <XTypeGroup>[
         XTypeGroup(label: 'JSON', extensions: <String>['json']),
@@ -2447,9 +2475,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     final String json = _package.prettyJson();
     if (location == null) {
       await Clipboard.setData(ClipboardData(text: json));
-      setState(() {
-        _statusMessage = 'Export canceled. JSON copied to clipboard instead.';
-      });
+      _setStatus('Export canceled. JSON copied to clipboard instead.');
       return;
     }
     final Uint8List fileData = Uint8List.fromList(utf8.encode(json));
@@ -2459,25 +2485,25 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       mimeType: 'application/json',
     );
     await file.saveTo(location.path);
-    setState(() {
-      _statusMessage = 'Exported planner package.';
-    });
+    _setStatus('Exported planner package.');
     _persistWorkspace();
+    } catch (error) {
+      _setStatus('Export failed: $error');
+    }
   }
 
   Future<void> _chooseDeployFolder() async {
     if (kIsWeb) {
-      setState(() {
-        _statusMessage =
-            'Deploy folder selection is available on desktop builds only.';
-      });
+      _setStatus('Deploy folder selection is available on desktop builds only.');
       return;
     }
-    final String? directory = await getDirectoryPath(
+    try {
+      final String? directory = await getDirectoryPath(
       confirmButtonText: 'Use Deploy Folder',
       initialDirectory: _deployExportDirectory,
     );
     if (directory == null || directory.isEmpty) {
+      _setStatus('Deploy folder selection canceled.');
       return;
     }
     setState(() {
@@ -2493,9 +2519,9 @@ class _PlannerHomePageState extends State<PlannerHomePage>
           deployWorkspace.workspaceJson!,
         );
         if (restored.autos.isNotEmpty) {
-          setState(() {
-            _package = restored;
-            _selectedAutoIndex = 0;
+      setState(() {
+        _package = restored;
+        _selectedAutoIndex = 0;
             _selectedStepIndex = restored.autos.first.steps.isEmpty ? null : 0;
             _selectedWaypointRef = _defaultWaypointRefForAuto(
               restored.autos.first,
@@ -2503,36 +2529,40 @@ class _PlannerHomePageState extends State<PlannerHomePage>
             _startPoseSelected = restored.autos.first.steps.isEmpty;
             _statusMessage = 'Loaded workspace from deploy folder $directory';
           });
+          _setStatus('Loaded workspace from deploy folder $directory');
         }
       } catch (_) {
-        setState(() {
-          _statusMessage =
-              'Deploy folder set, but workspace.json could not be parsed.';
-        });
+        _setStatus(
+          'Deploy folder set, but workspace.json could not be parsed.',
+        );
       }
     }
     _persistWorkspace();
+    if (deployWorkspace.workspaceJson == null ||
+        deployWorkspace.workspaceJson!.isEmpty) {
+      _setStatus('Deploy folder set to $directory');
+    }
+    } catch (error) {
+      _setStatus('Could not open folder picker: $error');
+    }
   }
 
   Future<void> _exportDeployLibrary() async {
     if (kIsWeb) {
-      setState(() {
-        _statusMessage =
-            'Deploy export writes folders on desktop builds only. Use PathPlanA on macOS to export directly into deploy.';
-      });
+      _setStatus(
+        'Deploy export writes folders on desktop builds only. Use PathPlanA on macOS to export directly into deploy.',
+      );
       return;
     }
-
-    String? directory = _deployExportDirectory;
-    if (directory == null || directory.isEmpty) {
-      directory = await getDirectoryPath(
+    try {
+      String? directory = _deployExportDirectory;
+      if (directory == null || directory.isEmpty) {
+        directory = await getDirectoryPath(
         confirmButtonText: 'Export Deploy Library',
         initialDirectory: '.',
       );
       if (directory == null || directory.isEmpty) {
-        setState(() {
-          _statusMessage = 'Deploy export canceled.';
-        });
+        _setStatus('Deploy export canceled.');
         return;
       }
       _deployExportDirectory = directory;
@@ -2548,6 +2578,10 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       _statusMessage = result.message;
     });
     _persistWorkspace();
+    _setStatus(result.message);
+    } catch (error) {
+      _setStatus('Deploy export failed: $error');
+    }
   }
 
   _DeployLibraryBundle _buildDeployLibraryBundle() {
