@@ -3,7 +3,9 @@
   "$id": "https://github.com/FRC1884/PathPlanA/raw/main/vendor/pathplana_autos.schema.json",
   "title": "PathPlanA Auto Package",
   "type": "object",
-  "required": ["autos"],
+  "required": [
+    "autos"
+  ],
   "properties": {
     "version": {
       "type": "string"
@@ -21,7 +23,11 @@
   "$defs": {
     "pose": {
       "type": "object",
-      "required": ["xMeters", "yMeters", "headingDeg"],
+      "required": [
+        "xMeters",
+        "yMeters",
+        "headingDeg"
+      ],
       "properties": {
         "xMeters": {
           "type": "number"
@@ -36,7 +42,14 @@
     },
     "zone": {
       "type": "object",
-      "required": ["id", "label", "xMinMeters", "yMinMeters", "xMaxMeters", "yMaxMeters"],
+      "required": [
+        "id",
+        "label",
+        "xMinMeters",
+        "yMinMeters",
+        "xMaxMeters",
+        "yMaxMeters"
+      ],
       "properties": {
         "id": {
           "type": "string"
@@ -63,7 +76,10 @@
     },
     "step": {
       "type": "object",
-      "required": ["label", "requestedState"],
+      "required": [
+        "label",
+        "requestedState"
+      ],
       "properties": {
         "spotId": {
           "type": "string"
@@ -115,7 +131,12 @@
     },
     "autoSpec": {
       "type": "object",
-      "required": ["id", "name", "startPose", "steps"],
+      "required": [
+        "id",
+        "name",
+        "startPose",
+        "steps"
+      ],
       "properties": {
         "id": {
           "type": "string"
