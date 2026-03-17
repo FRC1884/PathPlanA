@@ -110,8 +110,10 @@
       "required": [
         "id",
         "name",
-        "startProgress",
-        "endProgress"
+        "xMinMeters",
+        "yMinMeters",
+        "xMaxMeters",
+        "yMaxMeters"
       ],
       "properties": {
         "id": {
@@ -120,10 +122,16 @@
         "name": {
           "type": "string"
         },
-        "startProgress": {
+        "xMinMeters": {
           "type": "number"
         },
-        "endProgress": {
+        "yMinMeters": {
+          "type": "number"
+        },
+        "xMaxMeters": {
+          "type": "number"
+        },
+        "yMaxMeters": {
           "type": "number"
         },
         "enterCommandId": {

@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-const double fieldLengthMeters = 17.548;
-const double fieldWidthMeters = 8.052;
+const double fieldLengthMeters = 16.54048;
+const double fieldWidthMeters = 8.06958;
 const double robotSideInches = 27.5;
 const double defaultRobotSizeMeters = robotSideInches * 0.0254;
 const String plannerIconAsset = 'assets/branding/pathplana_icon.svg';
@@ -260,6 +260,74 @@ double poseDistanceMeters(PlannerPose a, PlannerPose b) {
   final double dx = b.xMeters - a.xMeters;
   final double dy = b.yMeters - a.yMeters;
   return math.sqrt(dx * dx + dy * dy);
+}
+
+PlannerPose clampPoseToField(PlannerPose pose) {
+  return PlannerPose(
+    xMeters: pose.xMeters.clamp(0.0, fieldLengthMeters),
+    yMeters: pose.yMeters.clamp(0.0, fieldWidthMeters),
+    headingDeg: pose.headingDeg,
+  );
+}
+
+PlannerZone clampPlannerZoneToField(PlannerZone zone) {
+  const double minSizeMeters = 0.2;
+  final double normalizedXMin = math.min(zone.xMinMeters, zone.xMaxMeters);
+  final double normalizedXMax = math.max(zone.xMinMeters, zone.xMaxMeters);
+  final double normalizedYMin = math.min(zone.yMinMeters, zone.yMaxMeters);
+  final double normalizedYMax = math.max(zone.yMinMeters, zone.yMaxMeters);
+  final double clampedXMin = normalizedXMin.clamp(
+    0.0,
+    fieldLengthMeters - minSizeMeters,
+  );
+  final double clampedYMin = normalizedYMin.clamp(
+    0.0,
+    fieldWidthMeters - minSizeMeters,
+  );
+  final double clampedXMax = normalizedXMax.clamp(
+    clampedXMin + minSizeMeters,
+    fieldLengthMeters,
+  );
+  final double clampedYMax = normalizedYMax.clamp(
+    clampedYMin + minSizeMeters,
+    fieldWidthMeters,
+  );
+  return zone.copyWith(
+    xMinMeters: clampedXMin,
+    yMinMeters: clampedYMin,
+    xMaxMeters: clampedXMax,
+    yMaxMeters: clampedYMax,
+  );
+}
+
+PlannerEventZone clampEventZoneToField(PlannerEventZone zone) {
+  const double minSizeMeters = 0.2;
+  final double normalizedXMin = math.min(zone.xMinMeters, zone.xMaxMeters);
+  final double normalizedXMax = math.max(zone.xMinMeters, zone.xMaxMeters);
+  final double normalizedYMin = math.min(zone.yMinMeters, zone.yMaxMeters);
+  final double normalizedYMax = math.max(zone.yMinMeters, zone.yMaxMeters);
+  final double clampedXMin = normalizedXMin.clamp(
+    0.0,
+    fieldLengthMeters - minSizeMeters,
+  );
+  final double clampedYMin = normalizedYMin.clamp(
+    0.0,
+    fieldWidthMeters - minSizeMeters,
+  );
+  final double clampedXMax = normalizedXMax.clamp(
+    clampedXMin + minSizeMeters,
+    fieldLengthMeters,
+  );
+  final double clampedYMax = normalizedYMax.clamp(
+    clampedYMin + minSizeMeters,
+    fieldWidthMeters,
+  );
+  return zone.copyWith(
+    xMinMeters: clampedXMin,
+    yMinMeters: clampedYMin,
+    xMaxMeters: clampedXMax,
+    yMaxMeters: clampedYMax,
+  );
 }
 
 List<PlannerPose> buildAutoRoutePoints(PlannerAuto auto) {
@@ -527,8 +595,10 @@ class PlannerEventZone {
   const PlannerEventZone({
     required this.id,
     required this.name,
-    required this.startProgress,
-    required this.endProgress,
+    required this.xMinMeters,
+    required this.yMinMeters,
+    required this.xMaxMeters,
+    required this.yMaxMeters,
     this.enterCommandId = '',
     this.exitCommandId = '',
     this.activeCommandId = '',
@@ -537,8 +607,10 @@ class PlannerEventZone {
 
   final String id;
   final String name;
-  final double startProgress;
-  final double endProgress;
+  final double xMinMeters;
+  final double yMinMeters;
+  final double xMaxMeters;
+  final double yMaxMeters;
   final String enterCommandId;
   final String exitCommandId;
   final String activeCommandId;
@@ -549,8 +621,10 @@ class PlannerEventZone {
   PlannerEventZone copyWith({
     String? id,
     String? name,
-    double? startProgress,
-    double? endProgress,
+    double? xMinMeters,
+    double? yMinMeters,
+    double? xMaxMeters,
+    double? yMaxMeters,
     String? enterCommandId,
     String? exitCommandId,
     String? activeCommandId,
@@ -559,8 +633,10 @@ class PlannerEventZone {
     return PlannerEventZone(
       id: id ?? this.id,
       name: name ?? this.name,
-      startProgress: startProgress ?? this.startProgress,
-      endProgress: endProgress ?? this.endProgress,
+      xMinMeters: xMinMeters ?? this.xMinMeters,
+      yMinMeters: yMinMeters ?? this.yMinMeters,
+      xMaxMeters: xMaxMeters ?? this.xMaxMeters,
+      yMaxMeters: yMaxMeters ?? this.yMaxMeters,
       enterCommandId: enterCommandId ?? this.enterCommandId,
       exitCommandId: exitCommandId ?? this.exitCommandId,
       activeCommandId: activeCommandId ?? this.activeCommandId,
@@ -571,8 +647,10 @@ class PlannerEventZone {
   Map<String, dynamic> toJson() => <String, dynamic>{
     'id': id,
     'name': name,
-    'startProgress': startProgress,
-    'endProgress': endProgress,
+    'xMinMeters': xMinMeters,
+    'yMinMeters': yMinMeters,
+    'xMaxMeters': xMaxMeters,
+    'yMaxMeters': yMaxMeters,
     'enterCommandId': enterCommandId,
     'exitCommandId': exitCommandId,
     'activeCommandId': activeCommandId,
@@ -580,17 +658,26 @@ class PlannerEventZone {
   };
 
   static PlannerEventZone fromJson(Map<String, dynamic> json) {
+    final double fallbackProgress =
+        ((json['startProgress'] as num?)?.toDouble() ?? 0.5).clamp(0.0, 1.0);
+    final double fallbackCenterX = fallbackProgress * fieldLengthMeters;
+    const double fallbackHalfWidth = 0.5;
+    const double fallbackHalfHeight = 0.55;
     return PlannerEventZone(
       id: json['id'] as String? ?? 'event-zone',
       name: json['name'] as String? ?? 'Zone',
-      startProgress: ((json['startProgress'] as num?)?.toDouble() ?? 0).clamp(
-        0.0,
-        1.0,
-      ),
-      endProgress: ((json['endProgress'] as num?)?.toDouble() ?? 1).clamp(
-        0.0,
-        1.0,
-      ),
+      xMinMeters:
+          (json['xMinMeters'] as num?)?.toDouble() ??
+          (fallbackCenterX - fallbackHalfWidth),
+      yMinMeters:
+          (json['yMinMeters'] as num?)?.toDouble() ??
+          ((fieldWidthMeters / 2) - fallbackHalfHeight),
+      xMaxMeters:
+          (json['xMaxMeters'] as num?)?.toDouble() ??
+          (fallbackCenterX + fallbackHalfWidth),
+      yMaxMeters:
+          (json['yMaxMeters'] as num?)?.toDouble() ??
+          ((fieldWidthMeters / 2) + fallbackHalfHeight),
       enterCommandId: json['enterCommandId'] as String? ?? '',
       exitCommandId: json['exitCommandId'] as String? ?? '',
       activeCommandId: json['activeCommandId'] as String? ?? '',
@@ -1043,8 +1130,10 @@ class PlannerAuto {
         PlannerEventZone(
           id: 'zone-1',
           name: 'Collect Window',
-          startProgress: 0.08,
-          endProgress: 0.34,
+          xMinMeters: 1.12,
+          yMinMeters: 5.18,
+          xMaxMeters: 2.38,
+          yMaxMeters: 6.3,
           enterCommandId: 'cmd-intake',
           activeCommandId: 'cmd-intake',
           colorHex: '#39D98A',
@@ -1713,7 +1802,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   void _updateZone(int index, PlannerZone zone) {
     _pushUndoSnapshot();
     final List<PlannerZone> zones = <PlannerZone>[..._selectedAuto.customZones];
-    zones[index] = zone;
+    zones[index] = clampPlannerZoneToField(zone);
     _updateSelectedAuto(
       _selectedAuto.copyWith(customZones: zones),
       recordHistory: false,
@@ -1791,8 +1880,10 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       PlannerEventZone(
         id: 'event-zone-${DateTime.now().microsecondsSinceEpoch}',
         name: 'Event Zone ${_selectedAuto.eventZones.length + 1}',
-        startProgress: 0.2,
-        endProgress: 0.45,
+        xMinMeters: 1.35,
+        yMinMeters: 2.1,
+        xMaxMeters: 2.65,
+        yMaxMeters: 3.55,
         enterCommandId: _draftCommand.id,
         activeCommandId: _draftCommand.id,
       ),
@@ -1812,7 +1903,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     final List<PlannerEventZone> zones = <PlannerEventZone>[
       ..._selectedAuto.eventZones,
     ];
-    zones[index] = zone;
+    zones[index] = clampEventZoneToField(zone);
     _updateSelectedAuto(
       _selectedAuto.copyWith(eventZones: zones),
       recordHistory: false,
@@ -2028,6 +2119,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                     onAddObstacleZone: _addZone,
                     onTogglePlayback: _togglePreviewPlayback,
                     onPlaybackScrub: _setPreviewProgress,
+                    onBeginDragEdit: _pushUndoSnapshot,
                     onSelectAutoFromBrowser: _selectAuto,
                     onOpenEvents: () => setState(
                       () => _selectedSection = PlannerSection.events,
@@ -2047,6 +2139,37 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                     onTap: _handleCanvasTap,
                     onSelectStep: (int index) =>
                         setState(() => _selectedStepIndex = index),
+                    onMoveStep: (int index, PlannerPose pose) {
+                      final List<PlannerStep> steps = <PlannerStep>[
+                        ..._selectedAuto.steps,
+                      ];
+                      steps[index] = steps[index].copyWith(
+                        pose: clampPoseToField(pose),
+                      );
+                      _updateSelectedAuto(
+                        _selectedAuto.copyWith(steps: steps),
+                        recordHistory: false,
+                      );
+                      setState(() => _selectedStepIndex = index);
+                    },
+                    onMoveWaypoint:
+                        (int stepIndex, int waypointIndex, PlannerPose pose) {
+                          final List<PlannerStep> steps = <PlannerStep>[
+                            ..._selectedAuto.steps,
+                          ];
+                          final List<PlannerPose> waypoints = <PlannerPose>[
+                            ...steps[stepIndex].routeWaypoints,
+                          ];
+                          waypoints[waypointIndex] = clampPoseToField(pose);
+                          steps[stepIndex] = steps[stepIndex].copyWith(
+                            routeWaypoints: waypoints,
+                          );
+                          _updateSelectedAuto(
+                            _selectedAuto.copyWith(steps: steps),
+                            recordHistory: false,
+                          );
+                          setState(() => _selectedStepIndex = stepIndex);
+                        },
                     onDeleteStep: (int index) {
                       final List<PlannerStep> steps = <PlannerStep>[
                         ..._selectedAuto.steps,
@@ -2084,6 +2207,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                     commandProfiles: _commandProfiles,
                     selectedMarkerIndex: _selectedMarkerIndex,
                     selectedEventZoneIndex: _selectedEventZoneIndex,
+                    onBeginDragEdit: _pushUndoSnapshot,
                     onSelectMarker: (int index) =>
                         setState(() => _selectedMarkerIndex = index),
                     onSelectEventZone: (int index) =>
@@ -2107,6 +2231,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                   _ObstacleSection(
                     auto: _selectedAuto,
                     selectedZoneIndex: _selectedZoneIndex,
+                    onBeginDragEdit: _pushUndoSnapshot,
                     onSelectZone: (int index) =>
                         setState(() => _selectedZoneIndex = index),
                     onAddZone: _addZone,
@@ -2305,6 +2430,7 @@ class _EditorSection extends StatelessWidget {
     required this.onAddObstacleZone,
     required this.onTogglePlayback,
     required this.onPlaybackScrub,
+    required this.onBeginDragEdit,
     required this.onSelectAutoFromBrowser,
     required this.onOpenEvents,
     required this.onOpenConstraints,
@@ -2313,6 +2439,8 @@ class _EditorSection extends StatelessWidget {
     required this.onOpenSettings,
     required this.onTap,
     required this.onSelectStep,
+    required this.onMoveStep,
+    required this.onMoveWaypoint,
     required this.onDeleteStep,
     required this.onRenameAuto,
     required this.onFolderChanged,
@@ -2344,6 +2472,7 @@ class _EditorSection extends StatelessWidget {
   final VoidCallback onAddObstacleZone;
   final VoidCallback onTogglePlayback;
   final ValueChanged<double> onPlaybackScrub;
+  final VoidCallback onBeginDragEdit;
   final ValueChanged<int> onSelectAutoFromBrowser;
   final VoidCallback onOpenEvents;
   final VoidCallback onOpenConstraints;
@@ -2352,6 +2481,9 @@ class _EditorSection extends StatelessWidget {
   final VoidCallback onOpenSettings;
   final ValueChanged<Offset> onTap;
   final ValueChanged<int> onSelectStep;
+  final void Function(int index, PlannerPose pose) onMoveStep;
+  final void Function(int stepIndex, int waypointIndex, PlannerPose pose)
+  onMoveWaypoint;
   final ValueChanged<int> onDeleteStep;
   final ValueChanged<String> onRenameAuto;
   final ValueChanged<String> onFolderChanged;
@@ -2487,7 +2619,12 @@ class _EditorSection extends StatelessWidget {
                                 flex: 6,
                                 child: _FieldEditor(
                                   auto: auto,
+                                  tool: tool,
                                   selectedStepIndex: selectedStepIndex,
+                                  onSelectStep: onSelectStep,
+                                  onMoveStep: onMoveStep,
+                                  onMoveWaypoint: onMoveWaypoint,
+                                  onBeginDragEdit: onBeginDragEdit,
                                   playbackProgress: playbackProgress,
                                   onTap: onTap,
                                 ),
@@ -3055,6 +3192,7 @@ class _EventsSection extends StatelessWidget {
     required this.commandProfiles,
     required this.selectedMarkerIndex,
     required this.selectedEventZoneIndex,
+    required this.onBeginDragEdit,
     required this.onSelectMarker,
     required this.onSelectEventZone,
     required this.onAddMarker,
@@ -3069,6 +3207,7 @@ class _EventsSection extends StatelessWidget {
   final List<PlannerCommandProfile> commandProfiles;
   final int? selectedMarkerIndex;
   final int? selectedEventZoneIndex;
+  final VoidCallback onBeginDragEdit;
   final ValueChanged<int> onSelectMarker;
   final ValueChanged<int> onSelectEventZone;
   final VoidCallback onAddMarker;
@@ -3109,6 +3248,22 @@ class _EventsSection extends StatelessWidget {
                         label: const Text('Add Marker'),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    height: 220,
+                    child: _FieldEditor(
+                      auto: auto,
+                      tool: PlannerTool.select,
+                      selectedStepIndex: null,
+                      selectedEventZoneIndex: selectedEventZoneIndex,
+                      onSelectEventZone: onSelectEventZone,
+                      onMoveEventZone: (int index, PlannerEventZone zone) =>
+                          onUpdateEventZone(index, zone),
+                      onBeginDragEdit: onBeginDragEdit,
+                      playbackProgress: 0,
+                      onTap: (_) {},
+                    ),
                   ),
                   const SizedBox(height: 10),
                   Expanded(
@@ -3229,7 +3384,7 @@ class _EventsSection extends StatelessWidget {
                                       children: <Widget>[
                                         Text(zone.name),
                                         Text(
-                                          '${(zone.startProgress * 100).round()}% → ${(zone.endProgress * 100).round()}%',
+                                          '${zone.xMinMeters.toStringAsFixed(2)}, ${zone.yMinMeters.toStringAsFixed(2)} → ${zone.xMaxMeters.toStringAsFixed(2)}, ${zone.yMaxMeters.toStringAsFixed(2)}',
                                           style: const TextStyle(
                                             color: Color(0xFF94A0B8),
                                             fontSize: 12,
@@ -3406,6 +3561,7 @@ class _ObstacleSection extends StatelessWidget {
   const _ObstacleSection({
     required this.auto,
     required this.selectedZoneIndex,
+    required this.onBeginDragEdit,
     required this.onSelectZone,
     required this.onAddZone,
     required this.onUpdateZone,
@@ -3414,6 +3570,7 @@ class _ObstacleSection extends StatelessWidget {
 
   final PlannerAuto auto;
   final int? selectedZoneIndex;
+  final VoidCallback onBeginDragEdit;
   final ValueChanged<int> onSelectZone;
   final VoidCallback onAddZone;
   final void Function(int index, PlannerZone zone) onUpdateZone;
@@ -3433,7 +3590,12 @@ class _ObstacleSection extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: _FieldEditor(
                 auto: auto,
+                tool: PlannerTool.select,
                 selectedStepIndex: null,
+                selectedZoneIndex: selectedZoneIndex,
+                onSelectZone: onSelectZone,
+                onMoveZone: onUpdateZone,
+                onBeginDragEdit: onBeginDragEdit,
                 playbackProgress: 0,
                 onTap: (_) {},
               ),
@@ -3686,6 +3848,8 @@ class _AutoGalleryCard extends StatelessWidget {
                       painter: _FieldPreviewPainter(
                         auto: auto,
                         selectedStepIndex: null,
+                        selectedZoneIndex: null,
+                        selectedEventZoneIndex: null,
                         mini: true,
                         playbackProgress: 0,
                       ),
@@ -3867,23 +4031,477 @@ class _ToolButton extends StatelessWidget {
   }
 }
 
-class _FieldEditor extends StatelessWidget {
+enum _FieldDragTargetType {
+  step,
+  waypoint,
+  obstacleMove,
+  obstacleLeft,
+  obstacleRight,
+  obstacleTop,
+  obstacleBottom,
+  eventZoneMove,
+  eventZoneLeft,
+  eventZoneRight,
+  eventZoneTop,
+  eventZoneBottom,
+}
+
+class _FieldDragTarget {
+  const _FieldDragTarget({
+    required this.type,
+    required this.index,
+    this.secondaryIndex,
+  });
+
+  final _FieldDragTargetType type;
+  final int index;
+  final int? secondaryIndex;
+}
+
+class _FieldEditor extends StatefulWidget {
   const _FieldEditor({
     required this.auto,
+    required this.tool,
     required this.selectedStepIndex,
     required this.playbackProgress,
     required this.onTap,
+    this.onBeginDragEdit,
+    this.onSelectStep,
+    this.onMoveStep,
+    this.onMoveWaypoint,
+    this.selectedZoneIndex,
+    this.onSelectZone,
+    this.onMoveZone,
+    this.selectedEventZoneIndex,
+    this.onSelectEventZone,
+    this.onMoveEventZone,
   });
 
   final PlannerAuto auto;
+  final PlannerTool tool;
   final int? selectedStepIndex;
   final double playbackProgress;
   final ValueChanged<Offset> onTap;
+  final VoidCallback? onBeginDragEdit;
+  final ValueChanged<int>? onSelectStep;
+  final void Function(int index, PlannerPose pose)? onMoveStep;
+  final void Function(int stepIndex, int waypointIndex, PlannerPose pose)?
+  onMoveWaypoint;
+  final int? selectedZoneIndex;
+  final ValueChanged<int>? onSelectZone;
+  final void Function(int index, PlannerZone zone)? onMoveZone;
+  final int? selectedEventZoneIndex;
+  final ValueChanged<int>? onSelectEventZone;
+  final void Function(int index, PlannerEventZone zone)? onMoveEventZone;
+
+  @override
+  State<_FieldEditor> createState() => _FieldEditorState();
+}
+
+class _FieldEditorState extends State<_FieldEditor> {
+  _FieldDragTarget? _dragTarget;
+  PlannerPose? _dragFieldPose;
+  PlannerZone? _dragObstacleStart;
+  PlannerEventZone? _dragEventZoneStart;
+  String? _dragLabel;
+
+  PlannerPose _offsetToFieldPose(Offset localPosition, Size size) {
+    final Rect fieldRect = resolvePlayableFieldRect(size);
+    final double normalizedX =
+        ((localPosition.dx - fieldRect.left) / fieldRect.width).clamp(0.0, 1.0);
+    final double normalizedY =
+        ((localPosition.dy - fieldRect.top) / fieldRect.height).clamp(0.0, 1.0);
+    return PlannerPose(
+      xMeters: normalizedX * fieldLengthMeters,
+      yMeters: fieldWidthMeters - (normalizedY * fieldWidthMeters),
+      headingDeg: 0,
+    );
+  }
+
+  Offset _fieldPoseToCanvas(PlannerPose pose, Size size) {
+    final Rect fieldRect = resolvePlayableFieldRect(size);
+    return Offset(
+      fieldRect.left + (pose.xMeters / fieldLengthMeters * fieldRect.width),
+      fieldRect.bottom - (pose.yMeters / fieldWidthMeters * fieldRect.height),
+    );
+  }
+
+  Rect _zoneToCanvasRect(
+    double xMin,
+    double yMin,
+    double xMax,
+    double yMax,
+    Size size,
+  ) {
+    final Rect fieldRect = resolvePlayableFieldRect(size);
+    return Rect.fromLTRB(
+      fieldRect.left + (xMin / fieldLengthMeters * fieldRect.width),
+      fieldRect.bottom - (yMax / fieldWidthMeters * fieldRect.height),
+      fieldRect.left + (xMax / fieldLengthMeters * fieldRect.width),
+      fieldRect.bottom - (yMin / fieldWidthMeters * fieldRect.height),
+    );
+  }
+
+  _FieldDragTarget? _hitTestRectHandles(
+    Offset localPosition,
+    Rect rect,
+    int index, {
+    required bool obstacle,
+  }) {
+    const double handleRadius = 16;
+    final Map<_FieldDragTargetType, Offset> handles =
+        <_FieldDragTargetType, Offset>{
+          obstacle
+              ? _FieldDragTargetType.obstacleLeft
+              : _FieldDragTargetType.eventZoneLeft: Offset(
+            rect.left,
+            rect.center.dy,
+          ),
+          obstacle
+              ? _FieldDragTargetType.obstacleRight
+              : _FieldDragTargetType.eventZoneRight: Offset(
+            rect.right,
+            rect.center.dy,
+          ),
+          obstacle
+              ? _FieldDragTargetType.obstacleTop
+              : _FieldDragTargetType.eventZoneTop: Offset(
+            rect.center.dx,
+            rect.top,
+          ),
+          obstacle
+              ? _FieldDragTargetType.obstacleBottom
+              : _FieldDragTargetType.eventZoneBottom: Offset(
+            rect.center.dx,
+            rect.bottom,
+          ),
+        };
+    for (final MapEntry<_FieldDragTargetType, Offset> entry
+        in handles.entries) {
+      if ((entry.value - localPosition).distance <= handleRadius) {
+        return _FieldDragTarget(type: entry.key, index: index);
+      }
+    }
+    if (rect.contains(localPosition)) {
+      return _FieldDragTarget(
+        type: obstacle
+            ? _FieldDragTargetType.obstacleMove
+            : _FieldDragTargetType.eventZoneMove,
+        index: index,
+      );
+    }
+    return null;
+  }
+
+  _FieldDragTarget? _hitTest(Offset localPosition, Size size) {
+    const double pointHitRadius = 18;
+    if (widget.onMoveZone != null && widget.auto.customZones.isNotEmpty) {
+      if (widget.selectedZoneIndex != null) {
+        final PlannerZone selectedZone =
+            widget.auto.customZones[widget.selectedZoneIndex!];
+        final _FieldDragTarget? selectedHandle = _hitTestRectHandles(
+          localPosition,
+          _zoneToCanvasRect(
+            selectedZone.xMinMeters,
+            selectedZone.yMinMeters,
+            selectedZone.xMaxMeters,
+            selectedZone.yMaxMeters,
+            size,
+          ),
+          widget.selectedZoneIndex!,
+          obstacle: true,
+        );
+        if (selectedHandle != null) {
+          return selectedHandle;
+        }
+      }
+      for (
+        int index = widget.auto.customZones.length - 1;
+        index >= 0;
+        index -= 1
+      ) {
+        final PlannerZone zone = widget.auto.customZones[index];
+        final Rect rect = _zoneToCanvasRect(
+          zone.xMinMeters,
+          zone.yMinMeters,
+          zone.xMaxMeters,
+          zone.yMaxMeters,
+          size,
+        );
+        if (rect.inflate(8).contains(localPosition)) {
+          widget.onSelectZone?.call(index);
+          return _FieldDragTarget(
+            type: _FieldDragTargetType.obstacleMove,
+            index: index,
+          );
+        }
+      }
+    }
+    if (widget.onMoveEventZone != null && widget.auto.eventZones.isNotEmpty) {
+      if (widget.selectedEventZoneIndex != null) {
+        final PlannerEventZone selectedZone =
+            widget.auto.eventZones[widget.selectedEventZoneIndex!];
+        final _FieldDragTarget? selectedHandle = _hitTestRectHandles(
+          localPosition,
+          _zoneToCanvasRect(
+            selectedZone.xMinMeters,
+            selectedZone.yMinMeters,
+            selectedZone.xMaxMeters,
+            selectedZone.yMaxMeters,
+            size,
+          ),
+          widget.selectedEventZoneIndex!,
+          obstacle: false,
+        );
+        if (selectedHandle != null) {
+          return selectedHandle;
+        }
+      }
+      for (
+        int index = widget.auto.eventZones.length - 1;
+        index >= 0;
+        index -= 1
+      ) {
+        final PlannerEventZone zone = widget.auto.eventZones[index];
+        final Rect rect = _zoneToCanvasRect(
+          zone.xMinMeters,
+          zone.yMinMeters,
+          zone.xMaxMeters,
+          zone.yMaxMeters,
+          size,
+        );
+        if (rect.inflate(8).contains(localPosition)) {
+          widget.onSelectEventZone?.call(index);
+          return _FieldDragTarget(
+            type: _FieldDragTargetType.eventZoneMove,
+            index: index,
+          );
+        }
+      }
+    }
+    if (widget.tool != PlannerTool.select) {
+      return null;
+    }
+    double bestDistance = double.infinity;
+    _FieldDragTarget? bestTarget;
+    for (
+      int stepIndex = 0;
+      stepIndex < widget.auto.steps.length;
+      stepIndex += 1
+    ) {
+      final PlannerStep step = widget.auto.steps[stepIndex];
+      final double stepDistance =
+          (_fieldPoseToCanvas(step.pose, size) - localPosition).distance;
+      if (stepDistance < pointHitRadius && stepDistance < bestDistance) {
+        bestDistance = stepDistance;
+        bestTarget = _FieldDragTarget(
+          type: _FieldDragTargetType.step,
+          index: stepIndex,
+        );
+      }
+      for (
+        int waypointIndex = 0;
+        waypointIndex < step.routeWaypoints.length;
+        waypointIndex += 1
+      ) {
+        final double waypointDistance =
+            (_fieldPoseToCanvas(step.routeWaypoints[waypointIndex], size) -
+                    localPosition)
+                .distance;
+        if (waypointDistance < pointHitRadius &&
+            waypointDistance < bestDistance) {
+          bestDistance = waypointDistance;
+          bestTarget = _FieldDragTarget(
+            type: _FieldDragTargetType.waypoint,
+            index: stepIndex,
+            secondaryIndex: waypointIndex,
+          );
+        }
+      }
+    }
+    return bestTarget;
+  }
+
+  void _startDrag(DragStartDetails details, Size size) {
+    final _FieldDragTarget? target = _hitTest(details.localPosition, size);
+    if (target == null) {
+      return;
+    }
+    widget.onBeginDragEdit?.call();
+    _dragTarget = target;
+    _dragFieldPose = _offsetToFieldPose(details.localPosition, size);
+    _dragObstacleStart = target.type.name.startsWith('obstacle')
+        ? widget.auto.customZones[target.index]
+        : null;
+    _dragEventZoneStart = target.type.name.startsWith('eventZone')
+        ? widget.auto.eventZones[target.index]
+        : null;
+  }
+
+  void _updateDrag(DragUpdateDetails details, Size size) {
+    if (_dragTarget == null || _dragFieldPose == null) {
+      return;
+    }
+    final PlannerPose currentPose = _offsetToFieldPose(
+      details.localPosition,
+      size,
+    );
+    final _FieldDragTarget target = _dragTarget!;
+    switch (target.type) {
+      case _FieldDragTargetType.step:
+        final PlannerStep step = widget.auto.steps[target.index];
+        widget.onSelectStep?.call(target.index);
+        widget.onMoveStep?.call(
+          target.index,
+          clampPoseToField(
+            step.pose.copyWith(
+              xMeters: currentPose.xMeters,
+              yMeters: currentPose.yMeters,
+            ),
+          ),
+        );
+        _dragLabel =
+            '${step.label}  x ${currentPose.xMeters.toStringAsFixed(2)}  y ${currentPose.yMeters.toStringAsFixed(2)}';
+        break;
+      case _FieldDragTargetType.waypoint:
+        widget.onSelectStep?.call(target.index);
+        widget.onMoveWaypoint?.call(
+          target.index,
+          target.secondaryIndex!,
+          clampPoseToField(currentPose),
+        );
+        _dragLabel =
+            'Waypoint ${target.secondaryIndex! + 1}  x ${currentPose.xMeters.toStringAsFixed(2)}  y ${currentPose.yMeters.toStringAsFixed(2)}';
+        break;
+      case _FieldDragTargetType.obstacleMove:
+      case _FieldDragTargetType.obstacleLeft:
+      case _FieldDragTargetType.obstacleRight:
+      case _FieldDragTargetType.obstacleTop:
+      case _FieldDragTargetType.obstacleBottom:
+        final PlannerZone start = _dragObstacleStart!;
+        final double dx = currentPose.xMeters - _dragFieldPose!.xMeters;
+        final double dy = currentPose.yMeters - _dragFieldPose!.yMeters;
+        PlannerZone moved = start;
+        switch (target.type) {
+          case _FieldDragTargetType.obstacleMove:
+            moved = start.copyWith(
+              xMinMeters: start.xMinMeters + dx,
+              xMaxMeters: start.xMaxMeters + dx,
+              yMinMeters: start.yMinMeters + dy,
+              yMaxMeters: start.yMaxMeters + dy,
+            );
+            break;
+          case _FieldDragTargetType.obstacleLeft:
+            moved = start.copyWith(xMinMeters: currentPose.xMeters);
+            break;
+          case _FieldDragTargetType.obstacleRight:
+            moved = start.copyWith(xMaxMeters: currentPose.xMeters);
+            break;
+          case _FieldDragTargetType.obstacleTop:
+            moved = start.copyWith(yMaxMeters: currentPose.yMeters);
+            break;
+          case _FieldDragTargetType.obstacleBottom:
+            moved = start.copyWith(yMinMeters: currentPose.yMeters);
+            break;
+          default:
+            break;
+        }
+        final PlannerZone clamped = clampPlannerZoneToField(moved);
+        widget.onSelectZone?.call(target.index);
+        widget.onMoveZone?.call(target.index, clamped);
+        _dragLabel =
+            '${clamped.label}  ${clamped.xMinMeters.toStringAsFixed(2)}, ${clamped.yMinMeters.toStringAsFixed(2)} → ${clamped.xMaxMeters.toStringAsFixed(2)}, ${clamped.yMaxMeters.toStringAsFixed(2)}';
+        break;
+      case _FieldDragTargetType.eventZoneMove:
+      case _FieldDragTargetType.eventZoneLeft:
+      case _FieldDragTargetType.eventZoneRight:
+      case _FieldDragTargetType.eventZoneTop:
+      case _FieldDragTargetType.eventZoneBottom:
+        final PlannerEventZone start = _dragEventZoneStart!;
+        final double dx = currentPose.xMeters - _dragFieldPose!.xMeters;
+        final double dy = currentPose.yMeters - _dragFieldPose!.yMeters;
+        PlannerEventZone moved = start;
+        switch (target.type) {
+          case _FieldDragTargetType.eventZoneMove:
+            moved = start.copyWith(
+              xMinMeters: start.xMinMeters + dx,
+              xMaxMeters: start.xMaxMeters + dx,
+              yMinMeters: start.yMinMeters + dy,
+              yMaxMeters: start.yMaxMeters + dy,
+            );
+            break;
+          case _FieldDragTargetType.eventZoneLeft:
+            moved = start.copyWith(xMinMeters: currentPose.xMeters);
+            break;
+          case _FieldDragTargetType.eventZoneRight:
+            moved = start.copyWith(xMaxMeters: currentPose.xMeters);
+            break;
+          case _FieldDragTargetType.eventZoneTop:
+            moved = start.copyWith(yMaxMeters: currentPose.yMeters);
+            break;
+          case _FieldDragTargetType.eventZoneBottom:
+            moved = start.copyWith(yMinMeters: currentPose.yMeters);
+            break;
+          default:
+            break;
+        }
+        final PlannerEventZone clamped = clampEventZoneToField(moved);
+        widget.onSelectEventZone?.call(target.index);
+        widget.onMoveEventZone?.call(target.index, clamped);
+        _dragLabel =
+            '${clamped.name}  ${clamped.xMinMeters.toStringAsFixed(2)}, ${clamped.yMinMeters.toStringAsFixed(2)} → ${clamped.xMaxMeters.toStringAsFixed(2)}, ${clamped.yMaxMeters.toStringAsFixed(2)}';
+        break;
+    }
+    setState(() {});
+  }
+
+  void _endDrag() {
+    setState(() {
+      _dragTarget = null;
+      _dragFieldPose = null;
+      _dragObstacleStart = null;
+      _dragEventZoneStart = null;
+      _dragLabel = null;
+    });
+  }
+
+  void _handleTap(TapUpDetails details, Size size) {
+    final _FieldDragTarget? target = _hitTest(details.localPosition, size);
+    if (target != null && widget.tool == PlannerTool.select) {
+      switch (target.type) {
+        case _FieldDragTargetType.step:
+        case _FieldDragTargetType.waypoint:
+          widget.onSelectStep?.call(target.index);
+          break;
+        case _FieldDragTargetType.obstacleMove:
+        case _FieldDragTargetType.obstacleLeft:
+        case _FieldDragTargetType.obstacleRight:
+        case _FieldDragTargetType.obstacleTop:
+        case _FieldDragTargetType.obstacleBottom:
+          widget.onSelectZone?.call(target.index);
+          break;
+        case _FieldDragTargetType.eventZoneMove:
+        case _FieldDragTargetType.eventZoneLeft:
+        case _FieldDragTargetType.eventZoneRight:
+        case _FieldDragTargetType.eventZoneTop:
+        case _FieldDragTargetType.eventZoneBottom:
+          widget.onSelectEventZone?.call(target.index);
+          break;
+      }
+      return;
+    }
+    final PlannerPose pose = _offsetToFieldPose(details.localPosition, size);
+    widget.onTap(Offset(pose.xMeters, pose.yMeters));
+  }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        final Size fieldSize = Size(
+          constraints.maxWidth,
+          constraints.maxHeight,
+        );
         return DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
@@ -3891,27 +4509,13 @@ class _FieldEditor extends StatelessWidget {
             border: Border.all(color: const Color(0xFF273246)),
           ),
           child: GestureDetector(
-            onTapDown: (TapDownDetails details) {
-              final RenderBox box = context.findRenderObject()! as RenderBox;
-              final Offset local = details.localPosition;
-              final Size size = box.size;
-              final Rect fieldRect = resolvePlayableFieldRect(size);
-              final double normalizedX =
-                  ((local.dx - fieldRect.left) / fieldRect.width).clamp(
-                    0.0,
-                    1.0,
-                  );
-              final double normalizedY =
-                  ((local.dy - fieldRect.top) / fieldRect.height).clamp(
-                    0.0,
-                    1.0,
-                  );
-              final Offset field = Offset(
-                normalizedX * fieldLengthMeters,
-                fieldWidthMeters - (normalizedY * fieldWidthMeters),
-              );
-              onTap(field);
-            },
+            onPanStart: (DragStartDetails details) =>
+                _startDrag(details, fieldSize),
+            onPanUpdate: (DragUpdateDetails details) =>
+                _updateDrag(details, fieldSize),
+            onPanEnd: (_) => _endDrag(),
+            onPanCancel: _endDrag,
+            onTapUp: (TapUpDetails details) => _handleTap(details, fieldSize),
             child: Stack(
               fit: StackFit.expand,
               children: <Widget>[
@@ -3926,13 +4530,40 @@ class _FieldEditor extends StatelessWidget {
                 ),
                 CustomPaint(
                   painter: _FieldPreviewPainter(
-                    auto: auto,
-                    selectedStepIndex: selectedStepIndex,
+                    auto: widget.auto,
+                    selectedStepIndex: widget.selectedStepIndex,
+                    selectedZoneIndex: widget.selectedZoneIndex,
+                    selectedEventZoneIndex: widget.selectedEventZoneIndex,
                     mini: false,
-                    playbackProgress: playbackProgress,
+                    playbackProgress: widget.playbackProgress,
                   ),
                   child: const SizedBox.expand(),
                 ),
+                if (_dragLabel != null)
+                  Positioned(
+                    left: 14,
+                    top: 14,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(0xE611161F),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF273246)),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        child: Text(
+                          _dragLabel!,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -3946,12 +4577,16 @@ class _FieldPreviewPainter extends CustomPainter {
   _FieldPreviewPainter({
     required this.auto,
     required this.selectedStepIndex,
+    required this.selectedZoneIndex,
+    required this.selectedEventZoneIndex,
     required this.mini,
     required this.playbackProgress,
   });
 
   final PlannerAuto auto;
   final int? selectedStepIndex;
+  final int? selectedZoneIndex;
+  final int? selectedEventZoneIndex;
   final bool mini;
   final double playbackProgress;
 
@@ -4002,6 +4637,25 @@ class _FieldPreviewPainter extends CustomPainter {
           ..strokeWidth = 1,
       );
     }
+    if (!mini &&
+        selectedZoneIndex != null &&
+        selectedZoneIndex! < auto.customZones.length) {
+      final PlannerZone zone = auto.customZones[selectedZoneIndex!];
+      _drawSelectionHandles(
+        canvas,
+        Rect.fromLTRB(
+          fieldRect.left +
+              (zone.xMinMeters / fieldLengthMeters * fieldRect.width),
+          fieldRect.bottom -
+              (zone.yMaxMeters / fieldWidthMeters * fieldRect.height),
+          fieldRect.left +
+              (zone.xMaxMeters / fieldLengthMeters * fieldRect.width),
+          fieldRect.bottom -
+              (zone.yMinMeters / fieldWidthMeters * fieldRect.height),
+        ),
+        const Color(0xFFFF6384),
+      );
+    }
 
     for (final PlannerConstraintZone zone in auto.constraintZones) {
       _drawProgressBand(
@@ -4014,12 +4668,45 @@ class _FieldPreviewPainter extends CustomPainter {
     }
 
     for (final PlannerEventZone zone in auto.eventZones) {
-      _drawProgressBand(
+      final Rect zoneRect = Rect.fromLTRB(
+        fieldRect.left +
+            (zone.xMinMeters / fieldLengthMeters * fieldRect.width),
+        fieldRect.bottom -
+            (zone.yMaxMeters / fieldWidthMeters * fieldRect.height),
+        fieldRect.left +
+            (zone.xMaxMeters / fieldLengthMeters * fieldRect.width),
+        fieldRect.bottom -
+            (zone.yMinMeters / fieldWidthMeters * fieldRect.height),
+      );
+      canvas.drawRect(
+        zoneRect,
+        Paint()..color = zone.color.withValues(alpha: 0.16),
+      );
+      canvas.drawRect(
+        zoneRect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = mini ? 1 : 1.5
+          ..color = zone.color,
+      );
+    }
+    if (!mini &&
+        selectedEventZoneIndex != null &&
+        selectedEventZoneIndex! < auto.eventZones.length) {
+      final PlannerEventZone zone = auto.eventZones[selectedEventZoneIndex!];
+      _drawSelectionHandles(
         canvas,
-        size,
-        zone.startProgress,
-        zone.endProgress,
-        zone.color.withValues(alpha: 0.18),
+        Rect.fromLTRB(
+          fieldRect.left +
+              (zone.xMinMeters / fieldLengthMeters * fieldRect.width),
+          fieldRect.bottom -
+              (zone.yMaxMeters / fieldWidthMeters * fieldRect.height),
+          fieldRect.left +
+              (zone.xMaxMeters / fieldLengthMeters * fieldRect.width),
+          fieldRect.bottom -
+              (zone.yMinMeters / fieldWidthMeters * fieldRect.height),
+        ),
+        zone.color,
       );
     }
 
@@ -4193,8 +4880,101 @@ class _FieldPreviewPainter extends CustomPainter {
   bool shouldRepaint(covariant _FieldPreviewPainter oldDelegate) {
     return oldDelegate.auto != auto ||
         oldDelegate.selectedStepIndex != selectedStepIndex ||
+        oldDelegate.selectedZoneIndex != selectedZoneIndex ||
+        oldDelegate.selectedEventZoneIndex != selectedEventZoneIndex ||
         oldDelegate.mini != mini ||
         oldDelegate.playbackProgress != playbackProgress;
+  }
+
+  void _drawSelectionHandles(Canvas canvas, Rect rect, Color color) {
+    final Paint outline = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..color = color.withValues(alpha: 0.95);
+    canvas.drawRect(rect, outline);
+    final Paint fill = Paint()..color = color;
+    final List<Offset> handleCenters = <Offset>[
+      Offset(rect.left, rect.center.dy),
+      Offset(rect.right, rect.center.dy),
+      Offset(rect.center.dx, rect.top),
+      Offset(rect.center.dx, rect.bottom),
+    ];
+    for (final Offset center in handleCenters) {
+      canvas.drawCircle(center, 6, fill);
+      canvas.drawCircle(
+        center,
+        6,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..color = const Color(0xFF0B0E14),
+      );
+    }
+    final Paint arrowPaint = Paint()
+      ..color = color
+      ..strokeWidth = 1.6
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(
+      Offset(rect.left - 10, rect.center.dy),
+      Offset(rect.left - 2, rect.center.dy),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.left - 10, rect.center.dy),
+      Offset(rect.left - 6, rect.center.dy - 4),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.left - 10, rect.center.dy),
+      Offset(rect.left - 6, rect.center.dy + 4),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.right + 10, rect.center.dy),
+      Offset(rect.right + 2, rect.center.dy),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.right + 10, rect.center.dy),
+      Offset(rect.right + 6, rect.center.dy - 4),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.right + 10, rect.center.dy),
+      Offset(rect.right + 6, rect.center.dy + 4),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.center.dx, rect.top - 10),
+      Offset(rect.center.dx, rect.top - 2),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.center.dx, rect.top - 10),
+      Offset(rect.center.dx - 4, rect.top - 6),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.center.dx, rect.top - 10),
+      Offset(rect.center.dx + 4, rect.top - 6),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.center.dx, rect.bottom + 10),
+      Offset(rect.center.dx, rect.bottom + 2),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.center.dx, rect.bottom + 10),
+      Offset(rect.center.dx - 4, rect.bottom + 6),
+      arrowPaint,
+    );
+    canvas.drawLine(
+      Offset(rect.center.dx, rect.bottom + 10),
+      Offset(rect.center.dx + 4, rect.bottom + 6),
+      arrowPaint,
+    );
   }
 }
 
@@ -4756,23 +5536,60 @@ class _EventZoneEditor extends StatelessWidget {
               onChanged(zone.copyWith(name: value.isEmpty ? zone.name : value)),
         ),
         const SizedBox(height: 10),
-        Text(
-          'Start • ${(zone.startProgress * 100).round()}%',
-          style: const TextStyle(color: Color(0xFF94A0B8)),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: TextFormField(
+                initialValue: zone.xMinMeters.toStringAsFixed(2),
+                decoration: const InputDecoration(labelText: 'Min X'),
+                onChanged: (String value) => onChanged(
+                  zone.copyWith(
+                    xMinMeters: double.tryParse(value) ?? zone.xMinMeters,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextFormField(
+                initialValue: zone.xMaxMeters.toStringAsFixed(2),
+                decoration: const InputDecoration(labelText: 'Max X'),
+                onChanged: (String value) => onChanged(
+                  zone.copyWith(
+                    xMaxMeters: double.tryParse(value) ?? zone.xMaxMeters,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-        Slider(
-          value: zone.startProgress.clamp(0.0, 1.0),
-          onChanged: (double value) =>
-              onChanged(zone.copyWith(startProgress: value)),
-        ),
-        Text(
-          'End • ${(zone.endProgress * 100).round()}%',
-          style: const TextStyle(color: Color(0xFF94A0B8)),
-        ),
-        Slider(
-          value: zone.endProgress.clamp(0.0, 1.0),
-          onChanged: (double value) =>
-              onChanged(zone.copyWith(endProgress: value)),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: TextFormField(
+                initialValue: zone.yMinMeters.toStringAsFixed(2),
+                decoration: const InputDecoration(labelText: 'Min Y'),
+                onChanged: (String value) => onChanged(
+                  zone.copyWith(
+                    yMinMeters: double.tryParse(value) ?? zone.yMinMeters,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextFormField(
+                initialValue: zone.yMaxMeters.toStringAsFixed(2),
+                decoration: const InputDecoration(labelText: 'Max Y'),
+                onChanged: (String value) => onChanged(
+                  zone.copyWith(
+                    yMaxMeters: double.tryParse(value) ?? zone.yMaxMeters,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         DropdownButtonFormField<String>(
           initialValue: zone.enterCommandId.isNotEmpty
