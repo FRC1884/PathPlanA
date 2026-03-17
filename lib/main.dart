@@ -10,7 +10,33 @@ const double fieldWidthMeters = 8.052;
 const double robotSideInches = 27.5;
 const double defaultRobotSizeMeters = robotSideInches * 0.0254;
 const String plannerIconAsset = 'assets/branding/pathplana_icon.svg';
-const String fieldBackgroundAsset = 'assets/field/rebuilt_topdown.png';
+const String fieldBackgroundAsset = 'assets/field/pathplanner_field26.png';
+const Size fieldBackgroundImageSize = Size(3508, 1814);
+const EdgeInsets fieldBackgroundInsets = EdgeInsets.fromLTRB(59, 89, 60, 90);
+
+Rect resolveFieldImageRect(Size canvasSize) {
+  final FittedSizes fitted = applyBoxFit(
+    BoxFit.contain,
+    fieldBackgroundImageSize,
+    canvasSize,
+  );
+  return Alignment.center.inscribe(
+    fitted.destination,
+    Offset.zero & canvasSize,
+  );
+}
+
+Rect resolvePlayableFieldRect(Size canvasSize) {
+  final Rect imageRect = resolveFieldImageRect(canvasSize);
+  final double scaleX = imageRect.width / fieldBackgroundImageSize.width;
+  final double scaleY = imageRect.height / fieldBackgroundImageSize.height;
+  return Rect.fromLTRB(
+    imageRect.left + (fieldBackgroundInsets.left * scaleX),
+    imageRect.top + (fieldBackgroundInsets.top * scaleY),
+    imageRect.right - (fieldBackgroundInsets.right * scaleX),
+    imageRect.bottom - (fieldBackgroundInsets.bottom * scaleY),
+  );
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -3647,11 +3673,13 @@ class _AutoGalleryCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: <Widget>[
-                    Padding(
-                      padding: EdgeInsets.zero,
-                      child: Image.asset(
-                        fieldBackgroundAsset,
-                        fit: BoxFit.fill,
+                    ColoredBox(
+                      color: const Color(0xFF0B0E14),
+                      child: Center(
+                        child: Image.asset(
+                          fieldBackgroundAsset,
+                          fit: BoxFit.contain,
+                        ),
                       ),
                     ),
                     CustomPaint(
@@ -3867,19 +3895,34 @@ class _FieldEditor extends StatelessWidget {
               final RenderBox box = context.findRenderObject()! as RenderBox;
               final Offset local = details.localPosition;
               final Size size = box.size;
+              final Rect fieldRect = resolvePlayableFieldRect(size);
+              final double normalizedX =
+                  ((local.dx - fieldRect.left) / fieldRect.width).clamp(
+                    0.0,
+                    1.0,
+                  );
+              final double normalizedY =
+                  ((local.dy - fieldRect.top) / fieldRect.height).clamp(
+                    0.0,
+                    1.0,
+                  );
               final Offset field = Offset(
-                (local.dx / size.width) * fieldLengthMeters,
-                fieldWidthMeters -
-                    ((local.dy / size.height) * fieldWidthMeters),
+                normalizedX * fieldLengthMeters,
+                fieldWidthMeters - (normalizedY * fieldWidthMeters),
               );
               onTap(field);
             },
             child: Stack(
               fit: StackFit.expand,
               children: <Widget>[
-                Padding(
-                  padding: EdgeInsets.zero,
-                  child: Image.asset(fieldBackgroundAsset, fit: BoxFit.fill),
+                ColoredBox(
+                  color: const Color(0xFF0B0E14),
+                  child: Center(
+                    child: Image.asset(
+                      fieldBackgroundAsset,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
                 ),
                 CustomPaint(
                   painter: _FieldPreviewPainter(
@@ -3915,6 +3958,7 @@ class _FieldPreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final Rect rect = Offset.zero & size;
+    final Rect fieldRect = resolvePlayableFieldRect(size);
     final Paint border = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = mini ? 1 : 1.4
@@ -3930,15 +3974,24 @@ class _FieldPreviewPainter extends CustomPainter {
     final Paint centerLine = Paint()
       ..color = const Color(0x22FFFFFF)
       ..strokeWidth = 1;
-    final double safeX = (8.15 / fieldLengthMeters) * size.width;
-    canvas.drawLine(Offset(safeX, 0), Offset(safeX, size.height), centerLine);
+    final double safeX =
+        fieldRect.left + ((8.15 / fieldLengthMeters) * fieldRect.width);
+    canvas.drawLine(
+      Offset(safeX, fieldRect.top),
+      Offset(safeX, fieldRect.bottom),
+      centerLine,
+    );
 
     for (final PlannerZone zone in auto.customZones) {
       final Rect zoneRect = Rect.fromLTRB(
-        zone.xMinMeters / fieldLengthMeters * size.width,
-        size.height - (zone.yMaxMeters / fieldWidthMeters * size.height),
-        zone.xMaxMeters / fieldLengthMeters * size.width,
-        size.height - (zone.yMinMeters / fieldWidthMeters * size.height),
+        fieldRect.left +
+            (zone.xMinMeters / fieldLengthMeters * fieldRect.width),
+        fieldRect.bottom -
+            (zone.yMaxMeters / fieldWidthMeters * fieldRect.height),
+        fieldRect.left +
+            (zone.xMaxMeters / fieldLengthMeters * fieldRect.width),
+        fieldRect.bottom -
+            (zone.yMinMeters / fieldWidthMeters * fieldRect.height),
       );
       canvas.drawRect(zoneRect, Paint()..color = const Color(0x30FF6384));
       canvas.drawRect(
@@ -3991,7 +4044,7 @@ class _FieldPreviewPainter extends CustomPainter {
         ..style = PaintingStyle.stroke;
       final Path path = Path();
       for (int j = 0; j < segment.length; j += 1) {
-        final Offset point = _toCanvas(segment[j], size);
+        final Offset point = _toCanvas(segment[j], fieldRect);
         if (j == 0) {
           path.moveTo(point.dx, point.dy);
         } else {
@@ -4004,7 +4057,7 @@ class _FieldPreviewPainter extends CustomPainter {
 
     for (final PlannerEventMarker marker in auto.eventMarkers) {
       final PlannerPose pose = sampleAutoPoseAtProgress(auto, marker.progress);
-      final Offset point = _toCanvas(pose, size);
+      final Offset point = _toCanvas(pose, fieldRect);
       canvas.drawCircle(
         point,
         mini ? 3.5 : 6,
@@ -4022,7 +4075,7 @@ class _FieldPreviewPainter extends CustomPainter {
 
     _drawRobotBox(
       canvas,
-      size,
+      fieldRect,
       auto.startPose,
       const Color(0xFFFFE8AD),
       mini ? 0.55 : 0.85,
@@ -4033,7 +4086,7 @@ class _FieldPreviewPainter extends CustomPainter {
       for (final PlannerPose waypoint in step.routeWaypoints) {
         _drawRobotBox(
           canvas,
-          size,
+          fieldRect,
           waypoint,
           step.requestedState.color,
           mini ? 0.35 : 0.48,
@@ -4041,7 +4094,7 @@ class _FieldPreviewPainter extends CustomPainter {
       }
       _drawRobotBox(
         canvas,
-        size,
+        fieldRect,
         step.pose,
         step.requestedState.color,
         i == selectedStepIndex ? (mini ? 0.6 : 0.92) : (mini ? 0.5 : 0.72),
@@ -4051,7 +4104,7 @@ class _FieldPreviewPainter extends CustomPainter {
     if (!mini) {
       _drawRobotBox(
         canvas,
-        size,
+        fieldRect,
         sampleAutoPoseAtProgress(auto, playbackProgress),
         const Color(0xFFE8EEFC),
         0.94,
@@ -4059,28 +4112,28 @@ class _FieldPreviewPainter extends CustomPainter {
     }
   }
 
-  Offset _toCanvas(PlannerPose pose, Size size) {
+  Offset _toCanvas(PlannerPose pose, Rect fieldRect) {
     return Offset(
-      pose.xMeters / fieldLengthMeters * size.width,
-      size.height - (pose.yMeters / fieldWidthMeters * size.height),
+      fieldRect.left + (pose.xMeters / fieldLengthMeters * fieldRect.width),
+      fieldRect.bottom - (pose.yMeters / fieldWidthMeters * fieldRect.height),
     );
   }
 
   void _drawRobotBox(
     Canvas canvas,
-    Size size,
+    Rect fieldRect,
     PlannerPose pose,
     Color color,
     double scale,
   ) {
-    final Offset center = _toCanvas(pose, size);
+    final Offset center = _toCanvas(pose, fieldRect);
     final double width =
         (auto.settings.robotLengthMeters / fieldLengthMeters) *
-        size.width *
+        fieldRect.width *
         scale;
     final double height =
         (auto.settings.robotWidthMeters / fieldWidthMeters) *
-        size.height *
+        fieldRect.height *
         scale;
     canvas.save();
     canvas.translate(center.dx, center.dy);
@@ -4123,8 +4176,9 @@ class _FieldPreviewPainter extends CustomPainter {
       auto,
       math.max(startProgress, endProgress),
     );
-    final Offset start = _toCanvas(startPose, size);
-    final Offset end = _toCanvas(endPose, size);
+    final Rect fieldRect = resolvePlayableFieldRect(size);
+    final Offset start = _toCanvas(startPose, fieldRect);
+    final Offset end = _toCanvas(endPose, fieldRect);
     canvas.drawLine(
       start,
       end,
