@@ -333,7 +333,9 @@ PlannerEventZone clampEventZoneToField(PlannerEventZone zone) {
 List<PlannerPose> buildAutoRoutePoints(PlannerAuto auto) {
   final List<PlannerPose> points = <PlannerPose>[auto.startPose];
   for (final PlannerStep step in auto.steps) {
-    points.addAll(step.routeWaypoints);
+    points.addAll(
+      step.routeWaypoints.map((PlannerWaypoint waypoint) => waypoint.pose),
+    );
     points.add(step.pose);
   }
   return points;
@@ -475,6 +477,123 @@ class PlannerPose {
       xMeters: (json['xMeters'] as num?)?.toDouble() ?? 0,
       yMeters: (json['yMeters'] as num?)?.toDouble() ?? 0,
       headingDeg: (json['headingDeg'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
+enum PlannerWaypointType { translation, pose }
+
+class PlannerWaypoint {
+  const PlannerWaypoint({
+    required this.pose,
+    this.type = PlannerWaypointType.translation,
+    this.bendStrength = 0.5,
+  });
+
+  final PlannerPose pose;
+  final PlannerWaypointType type;
+  final double bendStrength;
+
+  PlannerWaypoint copyWith({
+    PlannerPose? pose,
+    PlannerWaypointType? type,
+    double? bendStrength,
+  }) {
+    return PlannerWaypoint(
+      pose: pose ?? this.pose,
+      type: type ?? this.type,
+      bendStrength: bendStrength ?? this.bendStrength,
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'type': type.name,
+    'bendStrength': bendStrength,
+    'pose': pose.toJson(),
+  };
+
+  static PlannerWaypoint fromJson(Map<String, dynamic> json) {
+    final String rawType = json['type'] as String? ?? 'translation';
+    return PlannerWaypoint(
+      type: rawType == PlannerWaypointType.pose.name
+          ? PlannerWaypointType.pose
+          : PlannerWaypointType.translation,
+      bendStrength: (json['bendStrength'] as num?)?.toDouble() ?? 0.5,
+      pose: PlannerPose.fromJson(
+        json['pose'] as Map<String, dynamic>? ??
+            <String, dynamic>{
+              'xMeters': (json['xMeters'] as num?)?.toDouble() ?? 0,
+              'yMeters': (json['yMeters'] as num?)?.toDouble() ?? 0,
+              'headingDeg': (json['headingDeg'] as num?)?.toDouble() ?? 0,
+            },
+      ),
+    );
+  }
+}
+
+class PlannerWaypointRef {
+  const PlannerWaypointRef({required this.stepIndex, this.routeWaypointIndex});
+
+  final int stepIndex;
+  final int? routeWaypointIndex;
+
+  bool get isAnchor => routeWaypointIndex == null;
+}
+
+class PlannerNamedPose {
+  const PlannerNamedPose({
+    required this.id,
+    required this.name,
+    required this.pose,
+  });
+
+  final String id;
+  final String name;
+  final PlannerPose pose;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'id': id,
+    'name': name,
+    'pose': pose.toJson(),
+  };
+
+  static PlannerNamedPose fromJson(Map<String, dynamic> json) {
+    return PlannerNamedPose(
+      id: json['id'] as String? ?? 'start',
+      name: json['name'] as String? ?? 'Start',
+      pose: PlannerPose.fromJson(
+        json['pose'] as Map<String, dynamic>? ?? const {},
+      ),
+    );
+  }
+}
+
+class PlannerNamedValue {
+  const PlannerNamedValue({
+    required this.id,
+    required this.name,
+    required this.value,
+    this.unit = '',
+  });
+
+  final String id;
+  final String name;
+  final double value;
+  final String unit;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'id': id,
+    'name': name,
+    'value': value,
+    'unit': unit,
+  };
+
+  static PlannerNamedValue fromJson(Map<String, dynamic> json) {
+    return PlannerNamedValue(
+      id: json['id'] as String? ?? 'value',
+      name: json['name'] as String? ?? 'Value',
+      value: (json['value'] as num?)?.toDouble() ?? 0,
+      unit: json['unit'] as String? ?? '',
     );
   }
 }
@@ -695,6 +814,10 @@ class PlannerConstraintZone {
     this.maxVelocityMps = 2.0,
     this.maxAccelerationMpsSq = 2.0,
     this.constraintFactor = 0.65,
+    this.maxAngularVelocityDegPerSec = 180,
+    this.maxAngularAccelerationDegPerSecSq = 270,
+    this.toleranceMetersOverride = 0.06,
+    this.poseBlendWeightOverride = 0.35,
   });
 
   final String id;
@@ -704,6 +827,10 @@ class PlannerConstraintZone {
   final double maxVelocityMps;
   final double maxAccelerationMpsSq;
   final double constraintFactor;
+  final double maxAngularVelocityDegPerSec;
+  final double maxAngularAccelerationDegPerSecSq;
+  final double toleranceMetersOverride;
+  final double poseBlendWeightOverride;
 
   PlannerConstraintZone copyWith({
     String? id,
@@ -713,6 +840,10 @@ class PlannerConstraintZone {
     double? maxVelocityMps,
     double? maxAccelerationMpsSq,
     double? constraintFactor,
+    double? maxAngularVelocityDegPerSec,
+    double? maxAngularAccelerationDegPerSecSq,
+    double? toleranceMetersOverride,
+    double? poseBlendWeightOverride,
   }) {
     return PlannerConstraintZone(
       id: id ?? this.id,
@@ -722,6 +853,15 @@ class PlannerConstraintZone {
       maxVelocityMps: maxVelocityMps ?? this.maxVelocityMps,
       maxAccelerationMpsSq: maxAccelerationMpsSq ?? this.maxAccelerationMpsSq,
       constraintFactor: constraintFactor ?? this.constraintFactor,
+      maxAngularVelocityDegPerSec:
+          maxAngularVelocityDegPerSec ?? this.maxAngularVelocityDegPerSec,
+      maxAngularAccelerationDegPerSecSq:
+          maxAngularAccelerationDegPerSecSq ??
+          this.maxAngularAccelerationDegPerSecSq,
+      toleranceMetersOverride:
+          toleranceMetersOverride ?? this.toleranceMetersOverride,
+      poseBlendWeightOverride:
+          poseBlendWeightOverride ?? this.poseBlendWeightOverride,
     );
   }
 
@@ -733,6 +873,10 @@ class PlannerConstraintZone {
     'maxVelocityMps': maxVelocityMps,
     'maxAccelerationMpsSq': maxAccelerationMpsSq,
     'constraintFactor': constraintFactor,
+    'maxAngularVelocityDegPerSec': maxAngularVelocityDegPerSec,
+    'maxAngularAccelerationDegPerSecSq': maxAngularAccelerationDegPerSecSq,
+    'toleranceMetersOverride': toleranceMetersOverride,
+    'poseBlendWeightOverride': poseBlendWeightOverride,
   };
 
   static PlannerConstraintZone fromJson(Map<String, dynamic> json) {
@@ -751,6 +895,15 @@ class PlannerConstraintZone {
       maxAccelerationMpsSq:
           (json['maxAccelerationMpsSq'] as num?)?.toDouble() ?? 2.0,
       constraintFactor: (json['constraintFactor'] as num?)?.toDouble() ?? 0.65,
+      maxAngularVelocityDegPerSec:
+          (json['maxAngularVelocityDegPerSec'] as num?)?.toDouble() ?? 180,
+      maxAngularAccelerationDegPerSecSq:
+          (json['maxAngularAccelerationDegPerSecSq'] as num?)?.toDouble() ??
+          270,
+      toleranceMetersOverride:
+          (json['toleranceMetersOverride'] as num?)?.toDouble() ?? 0.06,
+      poseBlendWeightOverride:
+          (json['poseBlendWeightOverride'] as num?)?.toDouble() ?? 0.35,
     );
   }
 }
@@ -886,7 +1039,7 @@ class PlannerStep {
     this.spotId = '',
     this.commandId = '',
     this.commandName = '',
-    this.routeWaypoints = const <PlannerPose>[],
+    this.routeWaypoints = const <PlannerWaypoint>[],
     this.waitSeconds = 0,
   });
 
@@ -898,7 +1051,7 @@ class PlannerStep {
   final String spotId;
   final String commandId;
   final String commandName;
-  final List<PlannerPose> routeWaypoints;
+  final List<PlannerWaypoint> routeWaypoints;
   final double waitSeconds;
 
   PlannerStep copyWith({
@@ -910,7 +1063,7 @@ class PlannerStep {
     String? spotId,
     String? commandId,
     String? commandName,
-    List<PlannerPose>? routeWaypoints,
+    List<PlannerWaypoint>? routeWaypoints,
     double? waitSeconds,
   }) {
     return PlannerStep(
@@ -942,7 +1095,9 @@ class PlannerStep {
     'timeoutSeconds': settings.timeoutSeconds,
     'endVelocityMps': settings.endVelocityMps,
     'waitSeconds': waitSeconds,
-    'routeWaypoints': routeWaypoints.map((pose) => pose.toJson()).toList(),
+    'routeWaypoints': routeWaypoints
+        .map((PlannerWaypoint waypoint) => waypoint.toJson())
+        .toList(),
   };
 
   static PlannerStep fromJson(Map<String, dynamic> json) {
@@ -964,8 +1119,8 @@ class PlannerStep {
       waitSeconds: (json['waitSeconds'] as num?)?.toDouble() ?? 0,
       routeWaypoints: (json['routeWaypoints'] as List<dynamic>? ?? const [])
           .map(
-            (dynamic pose) =>
-                PlannerPose.fromJson(pose as Map<String, dynamic>),
+            (dynamic waypoint) =>
+                PlannerWaypoint.fromJson(waypoint as Map<String, dynamic>),
           )
           .toList(),
     );
@@ -1157,8 +1312,10 @@ class PlannerAuto {
           group: 'DEPOT',
           requestedState: RequestedState.intaking,
           pose: PlannerPose(xMeters: 1.82, yMeters: 5.92, headingDeg: 180),
-          routeWaypoints: <PlannerPose>[
-            PlannerPose(xMeters: 1.44, yMeters: 5.38, headingDeg: 180),
+          routeWaypoints: <PlannerWaypoint>[
+            PlannerWaypoint(
+              pose: PlannerPose(xMeters: 1.44, yMeters: 5.38, headingDeg: 180),
+            ),
           ],
           commandId: 'cmd-intake',
           commandName: 'Rear Intake',
@@ -1169,9 +1326,14 @@ class PlannerAuto {
           group: 'HUB',
           requestedState: RequestedState.shooting,
           pose: PlannerPose(xMeters: 4.61, yMeters: 5.48, headingDeg: -90),
-          routeWaypoints: <PlannerPose>[
-            PlannerPose(xMeters: 2.7, yMeters: 5.66, headingDeg: 0),
-            PlannerPose(xMeters: 3.88, yMeters: 5.66, headingDeg: -60),
+          routeWaypoints: <PlannerWaypoint>[
+            PlannerWaypoint(
+              pose: PlannerPose(xMeters: 2.7, yMeters: 5.66, headingDeg: 0),
+            ),
+            PlannerWaypoint(
+              pose: PlannerPose(xMeters: 3.88, yMeters: 5.66, headingDeg: -60),
+              type: PlannerWaypointType.pose,
+            ),
           ],
           commandId: 'cmd-score',
           commandName: 'Shoot Cycle',
@@ -1188,18 +1350,28 @@ class PlannerPackage {
     required this.generator,
     required this.autos,
     required this.commandProfiles,
+    this.globalStartPoses = const <PlannerNamedPose>[],
+    this.globalVariables = const <PlannerNamedValue>[],
   });
 
   final String version;
   final String generator;
   final List<PlannerAuto> autos;
   final List<PlannerCommandProfile> commandProfiles;
+  final List<PlannerNamedPose> globalStartPoses;
+  final List<PlannerNamedValue> globalVariables;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'version': version,
     'generator': generator,
     'commandProfiles': commandProfiles
         .map((PlannerCommandProfile command) => command.toJson())
+        .toList(),
+    'globalStartPoses': globalStartPoses
+        .map((PlannerNamedPose pose) => pose.toJson())
+        .toList(),
+    'globalVariables': globalVariables
+        .map((PlannerNamedValue value) => value.toJson())
         .toList(),
     'autos': autos.map((auto) => auto.toJson()).toList(),
   };
@@ -1213,6 +1385,32 @@ class PlannerPackage {
       version: '2026.1',
       generator: 'PathPlanA',
       commandProfiles: defaultCommandProfiles(),
+      globalStartPoses: const <PlannerNamedPose>[
+        PlannerNamedPose(
+          id: 'start-upper-left',
+          name: 'Upper Left Start',
+          pose: PlannerPose(xMeters: 1.55, yMeters: 5.75, headingDeg: 180),
+        ),
+        PlannerNamedPose(
+          id: 'start-lower-left',
+          name: 'Lower Left Start',
+          pose: PlannerPose(xMeters: 1.10, yMeters: 1.08, headingDeg: 180),
+        ),
+      ],
+      globalVariables: const <PlannerNamedValue>[
+        PlannerNamedValue(
+          id: 'default-intake-approach',
+          name: 'Default Intake Approach',
+          value: 0.55,
+          unit: 'm',
+        ),
+        PlannerNamedValue(
+          id: 'default-shot-buffer',
+          name: 'Default Shot Buffer',
+          value: 0.25,
+          unit: 's',
+        ),
+      ],
       autos: <PlannerAuto>[
         PlannerAuto.sample(),
         PlannerAuto.sample().copyWith(
@@ -1231,8 +1429,14 @@ class PlannerPackage {
               group: 'OUTPOST',
               requestedState: RequestedState.intaking,
               pose: PlannerPose(xMeters: 1.24, yMeters: 0.82, headingDeg: 180),
-              routeWaypoints: <PlannerPose>[
-                PlannerPose(xMeters: 1.68, yMeters: 1.18, headingDeg: 180),
+              routeWaypoints: <PlannerWaypoint>[
+                PlannerWaypoint(
+                  pose: PlannerPose(
+                    xMeters: 1.68,
+                    yMeters: 1.18,
+                    headingDeg: 180,
+                  ),
+                ),
               ],
             ),
             PlannerStep(
@@ -1241,9 +1445,18 @@ class PlannerPackage {
               group: 'HUB',
               requestedState: RequestedState.shooting,
               pose: PlannerPose(xMeters: 4.61, yMeters: 2.58, headingDeg: 90),
-              routeWaypoints: <PlannerPose>[
-                PlannerPose(xMeters: 2.46, yMeters: 2.1, headingDeg: 0),
-                PlannerPose(xMeters: 3.92, yMeters: 2.26, headingDeg: 50),
+              routeWaypoints: <PlannerWaypoint>[
+                PlannerWaypoint(
+                  pose: PlannerPose(xMeters: 2.46, yMeters: 2.1, headingDeg: 0),
+                ),
+                PlannerWaypoint(
+                  pose: PlannerPose(
+                    xMeters: 3.92,
+                    yMeters: 2.26,
+                    headingDeg: 50,
+                  ),
+                  type: PlannerWaypointType.pose,
+                ),
               ],
             ),
           ],
@@ -1259,6 +1472,8 @@ class PlannerPackage {
         version: '2026.1',
         generator: 'Imported',
         commandProfiles: defaultCommandProfiles(),
+        globalStartPoses: const <PlannerNamedPose>[],
+        globalVariables: const <PlannerNamedValue>[],
         autos: parsed
             .map(
               (dynamic auto) =>
@@ -1286,6 +1501,19 @@ class PlannerPackage {
       commandProfiles: importedProfiles.isEmpty
           ? defaultCommandProfiles()
           : importedProfiles,
+      globalStartPoses:
+          (parsed['globalStartPoses'] as List<dynamic>? ?? const [])
+              .map(
+                (dynamic pose) =>
+                    PlannerNamedPose.fromJson(pose as Map<String, dynamic>),
+              )
+              .toList(),
+      globalVariables: (parsed['globalVariables'] as List<dynamic>? ?? const [])
+          .map(
+            (dynamic value) =>
+                PlannerNamedValue.fromJson(value as Map<String, dynamic>),
+          )
+          .toList(),
       autos: (parsed['autos'] as List<dynamic>? ?? const [])
           .map(
             (dynamic auto) =>
@@ -1301,12 +1529,14 @@ class _PlannerWorkspaceSnapshot {
     required this.package,
     required this.selectedAutoIndex,
     required this.selectedStepIndex,
+    required this.selectedWaypointRef,
     required this.selectedSection,
   });
 
   final PlannerPackage package;
   final int selectedAutoIndex;
   final int? selectedStepIndex;
+  final PlannerWaypointRef? selectedWaypointRef;
   final PlannerSection selectedSection;
 }
 
@@ -1322,6 +1552,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
   PlannerPackage _package = PlannerPackage.sample();
   int _selectedAutoIndex = 0;
   int? _selectedStepIndex;
+  PlannerWaypointRef? _selectedWaypointRef;
   int? _selectedZoneIndex;
   int? _selectedMarkerIndex;
   int? _selectedEventZoneIndex;
@@ -1346,6 +1577,13 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       _resolveCommandProfileById(_draftCommandId) ?? _commandProfiles.first;
   double get _estimatedTimeSeconds =>
       computeEstimatedTimeSeconds(_selectedAuto);
+
+  PlannerWaypointRef? _defaultWaypointRefForAuto(PlannerAuto auto) {
+    if (auto.steps.isEmpty) {
+      return null;
+    }
+    return const PlannerWaypointRef(stepIndex: 0);
+  }
 
   @override
   void initState() {
@@ -1401,6 +1639,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       package: PlannerPackage.fromJsonString(_package.prettyJson()),
       selectedAutoIndex: _selectedAutoIndex,
       selectedStepIndex: _selectedStepIndex,
+      selectedWaypointRef: _selectedWaypointRef,
       selectedSection: _selectedSection,
     );
   }
@@ -1424,6 +1663,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       _selectedStepIndex = stepCount == 0 || snapshot.selectedStepIndex == null
           ? null
           : math.min(snapshot.selectedStepIndex!, stepCount - 1);
+      _selectedWaypointRef = snapshot.selectedWaypointRef;
       _selectedZoneIndex = _selectedAuto.customZones.isEmpty
           ? null
           : math.min(
@@ -1531,6 +1771,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
       _package = imported;
       _selectedAutoIndex = 0;
       _selectedStepIndex = imported.autos.first.steps.isNotEmpty ? 0 : null;
+      _selectedWaypointRef = _defaultWaypointRefForAuto(imported.autos.first);
       _selectedZoneIndex = imported.autos.first.customZones.isNotEmpty
           ? 0
           : null;
@@ -1595,9 +1836,12 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         generator: _package.generator,
         autos: <PlannerAuto>[..._package.autos, auto],
         commandProfiles: _package.commandProfiles,
+        globalStartPoses: _package.globalStartPoses,
+        globalVariables: _package.globalVariables,
       );
       _selectedAutoIndex = _package.autos.length - 1;
       _selectedStepIndex = null;
+      _selectedWaypointRef = null;
       _selectedZoneIndex = auto.customZones.isNotEmpty ? 0 : null;
       _selectedMarkerIndex = auto.eventMarkers.isNotEmpty ? 0 : null;
       _selectedEventZoneIndex = auto.eventZones.isNotEmpty ? 0 : null;
@@ -1624,9 +1868,14 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         generator: _package.generator,
         autos: autos,
         commandProfiles: _package.commandProfiles,
+        globalStartPoses: _package.globalStartPoses,
+        globalVariables: _package.globalVariables,
       );
       _selectedAutoIndex = math.min(_selectedAutoIndex, autos.length - 1);
       _selectedStepIndex = autos[_selectedAutoIndex].steps.isEmpty ? null : 0;
+      _selectedWaypointRef = _defaultWaypointRefForAuto(
+        autos[_selectedAutoIndex],
+      );
       _selectedZoneIndex = autos[_selectedAutoIndex].customZones.isEmpty
           ? null
           : 0;
@@ -1650,6 +1899,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     setState(() {
       _selectedAutoIndex = index;
       _selectedStepIndex = _selectedAuto.steps.isEmpty ? null : 0;
+      _selectedWaypointRef = _defaultWaypointRefForAuto(_selectedAuto);
       _selectedZoneIndex = _selectedAuto.customZones.isEmpty ? null : 0;
       _selectedMarkerIndex = _selectedAuto.eventMarkers.isEmpty ? null : 0;
       _selectedEventZoneIndex = _selectedAuto.eventZones.isEmpty ? null : 0;
@@ -1677,6 +1927,8 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         generator: _package.generator,
         autos: autos,
         commandProfiles: _package.commandProfiles,
+        globalStartPoses: _package.globalStartPoses,
+        globalVariables: _package.globalVariables,
       );
     });
     _configurePreviewAnimation();
@@ -1714,6 +1966,9 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         _updateSelectedAuto(_selectedAuto.copyWith(steps: steps));
         setState(() {
           _selectedStepIndex = steps.length - 1;
+          _selectedWaypointRef = PlannerWaypointRef(
+            stepIndex: steps.length - 1,
+          );
           _statusMessage = 'Added ${_draftCommand.name} step.';
         });
       case PlannerTool.addWaypoint:
@@ -1726,10 +1981,18 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         final PlannerStep step = _selectedAuto.steps[_selectedStepIndex!];
         final List<PlannerStep> steps = <PlannerStep>[..._selectedAuto.steps];
         steps[_selectedStepIndex!] = step.copyWith(
-          routeWaypoints: <PlannerPose>[...step.routeWaypoints, pose],
+          routeWaypoints: <PlannerWaypoint>[
+            ...step.routeWaypoints,
+            PlannerWaypoint(pose: pose),
+          ],
         );
         _updateSelectedAuto(_selectedAuto.copyWith(steps: steps));
         setState(() {
+          _selectedWaypointRef = PlannerWaypointRef(
+            stepIndex: _selectedStepIndex!,
+            routeWaypointIndex:
+                steps[_selectedStepIndex!].routeWaypoints.length - 1,
+          );
           _statusMessage = 'Added waypoint to ${step.label}.';
         });
     }
@@ -1754,6 +2017,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
     }
     setState(() {
       _selectedStepIndex = nearestIndex;
+      _selectedWaypointRef = PlannerWaypointRef(stepIndex: nearestIndex);
       _statusMessage = 'Selected ${_selectedAuto.steps[nearestIndex].label}.';
     });
   }
@@ -1766,6 +2030,8 @@ class _PlannerHomePageState extends State<PlannerHomePage>
         generator: _package.generator,
         autos: _package.autos,
         commandProfiles: profiles,
+        globalStartPoses: _package.globalStartPoses,
+        globalVariables: _package.globalVariables,
       );
       if (!profiles.any(
         (PlannerCommandProfile profile) => profile.id == _draftCommandId,
@@ -2097,6 +2363,9 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                     auto: _selectedAuto,
                     commandProfiles: _commandProfiles,
                     selectedStepIndex: _selectedStepIndex,
+                    selectedWaypointRef: _selectedWaypointRef,
+                    globalStartPoses: _package.globalStartPoses,
+                    globalVariables: _package.globalVariables,
                     tool: _tool,
                     draftCommandId: _draftCommandId,
                     draftHeadingDeg: _draftHeadingDeg,
@@ -2137,8 +2406,16 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                       () => _selectedSection = PlannerSection.settings,
                     ),
                     onTap: _handleCanvasTap,
-                    onSelectStep: (int index) =>
-                        setState(() => _selectedStepIndex = index),
+                    onSelectStep: (int index) => setState(() {
+                      _selectedStepIndex = index;
+                      _selectedWaypointRef = PlannerWaypointRef(
+                        stepIndex: index,
+                      );
+                    }),
+                    onSelectWaypoint: (PlannerWaypointRef ref) => setState(() {
+                      _selectedStepIndex = ref.stepIndex;
+                      _selectedWaypointRef = ref;
+                    }),
                     onMoveStep: (int index, PlannerPose pose) {
                       final List<PlannerStep> steps = <PlannerStep>[
                         ..._selectedAuto.steps,
@@ -2150,17 +2427,24 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                         _selectedAuto.copyWith(steps: steps),
                         recordHistory: false,
                       );
-                      setState(() => _selectedStepIndex = index);
+                      setState(() {
+                        _selectedStepIndex = index;
+                        _selectedWaypointRef = PlannerWaypointRef(
+                          stepIndex: index,
+                        );
+                      });
                     },
                     onMoveWaypoint:
                         (int stepIndex, int waypointIndex, PlannerPose pose) {
                           final List<PlannerStep> steps = <PlannerStep>[
                             ..._selectedAuto.steps,
                           ];
-                          final List<PlannerPose> waypoints = <PlannerPose>[
-                            ...steps[stepIndex].routeWaypoints,
-                          ];
-                          waypoints[waypointIndex] = clampPoseToField(pose);
+                          final List<PlannerWaypoint> waypoints =
+                              <PlannerWaypoint>[
+                                ...steps[stepIndex].routeWaypoints,
+                              ];
+                          waypoints[waypointIndex] = waypoints[waypointIndex]
+                              .copyWith(pose: clampPoseToField(pose));
                           steps[stepIndex] = steps[stepIndex].copyWith(
                             routeWaypoints: waypoints,
                           );
@@ -2168,7 +2452,13 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                             _selectedAuto.copyWith(steps: steps),
                             recordHistory: false,
                           );
-                          setState(() => _selectedStepIndex = stepIndex);
+                          setState(() {
+                            _selectedStepIndex = stepIndex;
+                            _selectedWaypointRef = PlannerWaypointRef(
+                              stepIndex: stepIndex,
+                              routeWaypointIndex: waypointIndex,
+                            );
+                          });
                         },
                     onDeleteStep: (int index) {
                       final List<PlannerStep> steps = <PlannerStep>[
@@ -2179,6 +2469,11 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                         _selectedStepIndex = steps.isEmpty
                             ? null
                             : math.min(index, steps.length - 1);
+                        _selectedWaypointRef = steps.isEmpty
+                            ? null
+                            : PlannerWaypointRef(
+                                stepIndex: math.min(index, steps.length - 1),
+                              );
                       });
                     },
                     onRenameAuto: (String value) => _updateSelectedAuto(
@@ -2187,10 +2482,40 @@ class _PlannerHomePageState extends State<PlannerHomePage>
                     onFolderChanged: (String value) => _updateSelectedAuto(
                       _selectedAuto.copyWith(folder: value),
                     ),
+                    onApplyGlobalStartPose: (PlannerPose pose) =>
+                        _updateSelectedAuto(
+                          _selectedAuto.copyWith(startPose: pose),
+                        ),
                     onUpdateSettings: (PlannerSettings settings) =>
                         _updateSelectedAuto(
                           _selectedAuto.copyWith(settings: settings),
                         ),
+                    onUpdateWaypoint:
+                        (PlannerWaypointRef ref, PlannerWaypoint waypoint) {
+                          final List<PlannerStep> steps = <PlannerStep>[
+                            ..._selectedAuto.steps,
+                          ];
+                          if (ref.routeWaypointIndex == null) {
+                            steps[ref.stepIndex] = steps[ref.stepIndex]
+                                .copyWith(
+                                  pose: clampPoseToField(waypoint.pose),
+                                );
+                          } else {
+                            final List<PlannerWaypoint> waypoints =
+                                <PlannerWaypoint>[
+                                  ...steps[ref.stepIndex].routeWaypoints,
+                                ];
+                            waypoints[ref.routeWaypointIndex!] = waypoint
+                                .copyWith(
+                                  pose: clampPoseToField(waypoint.pose),
+                                );
+                            steps[ref.stepIndex] = steps[ref.stepIndex]
+                                .copyWith(routeWaypoints: waypoints);
+                          }
+                          _updateSelectedAuto(
+                            _selectedAuto.copyWith(steps: steps),
+                          );
+                        },
                     onUpdateStep: (PlannerStep step) {
                       if (_selectedStepIndex == null) {
                         return;
@@ -2411,6 +2736,9 @@ class _EditorSection extends StatelessWidget {
     required this.auto,
     required this.commandProfiles,
     required this.selectedStepIndex,
+    required this.selectedWaypointRef,
+    required this.globalStartPoses,
+    required this.globalVariables,
     required this.tool,
     required this.draftCommandId,
     required this.draftHeadingDeg,
@@ -2439,11 +2767,14 @@ class _EditorSection extends StatelessWidget {
     required this.onOpenSettings,
     required this.onTap,
     required this.onSelectStep,
+    required this.onSelectWaypoint,
     required this.onMoveStep,
     required this.onMoveWaypoint,
     required this.onDeleteStep,
     required this.onRenameAuto,
     required this.onFolderChanged,
+    required this.onApplyGlobalStartPose,
+    required this.onUpdateWaypoint,
     required this.onUpdateSettings,
     required this.onUpdateStep,
   });
@@ -2453,6 +2784,9 @@ class _EditorSection extends StatelessWidget {
   final PlannerAuto auto;
   final List<PlannerCommandProfile> commandProfiles;
   final int? selectedStepIndex;
+  final PlannerWaypointRef? selectedWaypointRef;
+  final List<PlannerNamedPose> globalStartPoses;
+  final List<PlannerNamedValue> globalVariables;
   final PlannerTool tool;
   final String draftCommandId;
   final double draftHeadingDeg;
@@ -2481,12 +2815,16 @@ class _EditorSection extends StatelessWidget {
   final VoidCallback onOpenSettings;
   final ValueChanged<Offset> onTap;
   final ValueChanged<int> onSelectStep;
+  final ValueChanged<PlannerWaypointRef> onSelectWaypoint;
   final void Function(int index, PlannerPose pose) onMoveStep;
   final void Function(int stepIndex, int waypointIndex, PlannerPose pose)
   onMoveWaypoint;
   final ValueChanged<int> onDeleteStep;
   final ValueChanged<String> onRenameAuto;
   final ValueChanged<String> onFolderChanged;
+  final ValueChanged<PlannerPose> onApplyGlobalStartPose;
+  final void Function(PlannerWaypointRef ref, PlannerWaypoint waypoint)
+  onUpdateWaypoint;
   final ValueChanged<PlannerSettings> onUpdateSettings;
   final ValueChanged<PlannerStep> onUpdateStep;
 
@@ -2622,6 +2960,7 @@ class _EditorSection extends StatelessWidget {
                                   tool: tool,
                                   selectedStepIndex: selectedStepIndex,
                                   onSelectStep: onSelectStep,
+                                  onSelectWaypoint: onSelectWaypoint,
                                   onMoveStep: onMoveStep,
                                   onMoveWaypoint: onMoveWaypoint,
                                   onBeginDragEdit: onBeginDragEdit,
@@ -2658,9 +2997,14 @@ class _EditorSection extends StatelessWidget {
             auto: auto,
             commandProfiles: commandProfiles,
             selectedStepIndex: selectedStepIndex,
+            selectedWaypointRef: selectedWaypointRef,
+            globalStartPoses: globalStartPoses,
+            globalVariables: globalVariables,
             estimatedTimeSeconds: estimatedTimeSeconds,
             onRenameAuto: onRenameAuto,
             onFolderChanged: onFolderChanged,
+            onApplyGlobalStartPose: onApplyGlobalStartPose,
+            onUpdateWaypoint: onUpdateWaypoint,
             onUpdateSettings: onUpdateSettings,
             onUpdateStep: onUpdateStep,
             onOpenSettings: onOpenSettings,
@@ -2917,9 +3261,14 @@ class _EditorInspector extends StatelessWidget {
     required this.auto,
     required this.commandProfiles,
     required this.selectedStepIndex,
+    required this.selectedWaypointRef,
+    required this.globalStartPoses,
+    required this.globalVariables,
     required this.estimatedTimeSeconds,
     required this.onRenameAuto,
     required this.onFolderChanged,
+    required this.onApplyGlobalStartPose,
+    required this.onUpdateWaypoint,
     required this.onUpdateSettings,
     required this.onUpdateStep,
     required this.onOpenSettings,
@@ -2928,18 +3277,31 @@ class _EditorInspector extends StatelessWidget {
   final PlannerAuto auto;
   final List<PlannerCommandProfile> commandProfiles;
   final int? selectedStepIndex;
+  final PlannerWaypointRef? selectedWaypointRef;
+  final List<PlannerNamedPose> globalStartPoses;
+  final List<PlannerNamedValue> globalVariables;
   final double estimatedTimeSeconds;
   final ValueChanged<String> onRenameAuto;
   final ValueChanged<String> onFolderChanged;
+  final ValueChanged<PlannerPose> onApplyGlobalStartPose;
+  final void Function(PlannerWaypointRef ref, PlannerWaypoint waypoint)
+  onUpdateWaypoint;
   final ValueChanged<PlannerSettings> onUpdateSettings;
   final ValueChanged<PlannerStep> onUpdateStep;
   final VoidCallback onOpenSettings;
 
   @override
   Widget build(BuildContext context) {
-    final PlannerStep? selectedStep = selectedStepIndex == null
+    final PlannerWaypointRef? selectedRef = selectedWaypointRef;
+    final PlannerWaypoint? selectedWaypoint = selectedRef == null
         ? null
-        : auto.steps[selectedStepIndex!];
+        : selectedRef.routeWaypointIndex == null
+        ? PlannerWaypoint(
+            pose: auto.steps[selectedRef.stepIndex].pose,
+            type: PlannerWaypointType.pose,
+          )
+        : auto.steps[selectedRef.stepIndex].routeWaypoints[selectedRef
+              .routeWaypointIndex!];
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -2950,7 +3312,7 @@ class _EditorInspector extends StatelessWidget {
               style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
             ),
             const SizedBox(height: 12),
-            if (selectedStep == null) ...<Widget>[
+            if (selectedWaypoint == null) ...<Widget>[
               TextFormField(
                 initialValue: auto.name,
                 decoration: const InputDecoration(labelText: 'Auto Name'),
@@ -3026,9 +3388,57 @@ class _EditorInspector extends StatelessWidget {
                     Text(
                       'Heading ${auto.startPose.headingDeg.toStringAsFixed(0)}°',
                     ),
+                    if (globalStartPoses.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        decoration: const InputDecoration(
+                          labelText: 'Apply Global Start',
+                        ),
+                        items: globalStartPoses
+                            .map(
+                              (PlannerNamedPose namedPose) =>
+                                  DropdownMenuItem<String>(
+                                    value: namedPose.id,
+                                    child: Text(namedPose.name),
+                                  ),
+                            )
+                            .toList(),
+                        onChanged: (String? id) {
+                          if (id == null) {
+                            return;
+                          }
+                          for (final PlannerNamedPose namedPose
+                              in globalStartPoses) {
+                            if (namedPose.id == id) {
+                              onApplyGlobalStartPose(namedPose.pose);
+                              break;
+                            }
+                          }
+                        },
+                      ),
+                    ],
                   ],
                 ),
               ),
+              if (globalVariables.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 12),
+                _SettingsSection(
+                  title: 'Global Variables',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: globalVariables
+                        .map(
+                          (PlannerNamedValue value) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Text(
+                              '${value.name}: ${value.value.toStringAsFixed(2)} ${value.unit}',
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               OutlinedButton(
                 onPressed: onOpenSettings,
@@ -3036,81 +3446,65 @@ class _EditorInspector extends StatelessWidget {
               ),
             ] else ...<Widget>[
               const Text(
-                'Selected Step',
+                'Selected Waypoint',
                 style: TextStyle(color: Color(0xFF94A0B8), fontSize: 12),
               ),
               const SizedBox(height: 8),
-              TextFormField(
-                initialValue: selectedStep.label,
-                decoration: const InputDecoration(labelText: 'Step Label'),
-                onChanged: (String value) =>
-                    onUpdateStep(selectedStep.copyWith(label: value)),
+              Text(
+                selectedRef != null && selectedRef.routeWaypointIndex == null
+                    ? 'Anchor waypoint'
+                    : selectedWaypoint.type == PlannerWaypointType.translation
+                    ? 'Translation waypoint'
+                    : 'Pose waypoint',
+                style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 10),
-              DropdownButtonFormField<String>(
-                initialValue: selectedStep.commandId.isNotEmpty
-                    ? selectedStep.commandId
-                    : commandProfiles.first.id,
-                decoration: const InputDecoration(labelText: 'Named Command'),
-                items: commandProfiles
-                    .map(
-                      (PlannerCommandProfile profile) =>
-                          DropdownMenuItem<String>(
-                            value: profile.id,
-                            child: Text(
-                              '${profile.name} → ${profile.requestedState}',
-                            ),
-                          ),
-                    )
-                    .toList(),
-                onChanged: (String? commandId) {
-                  if (commandId == null) {
-                    return;
-                  }
-                  final PlannerCommandProfile profile = commandProfiles
-                      .firstWhere(
-                        (PlannerCommandProfile entry) => entry.id == commandId,
-                        orElse: () => commandProfiles.first,
-                      );
-                  onUpdateStep(
-                    selectedStep.copyWith(
-                      commandId: profile.id,
-                      commandName: profile.name,
-                      requestedState: RequestedState.fromToken(
-                        profile.requestedState,
-                      ),
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 10),
-              _LabeledSlider(
-                label: 'Wait Seconds',
-                value: selectedStep.waitSeconds,
-                min: 0,
-                max: 3,
-                onChanged: (double value) =>
-                    onUpdateStep(selectedStep.copyWith(waitSeconds: value)),
+              DropdownButtonFormField<PlannerWaypointType>(
+                initialValue: selectedWaypoint.type,
+                decoration: const InputDecoration(labelText: 'Waypoint Type'),
+                items: const <DropdownMenuItem<PlannerWaypointType>>[
+                  DropdownMenuItem(
+                    value: PlannerWaypointType.translation,
+                    child: Text('Translation'),
+                  ),
+                  DropdownMenuItem(
+                    value: PlannerWaypointType.pose,
+                    child: Text('Pose + Heading'),
+                  ),
+                ],
+                onChanged:
+                    selectedRef == null ||
+                        selectedRef.routeWaypointIndex == null
+                    ? null
+                    : (PlannerWaypointType? value) {
+                        if (value == null) {
+                          return;
+                        }
+                        onUpdateWaypoint(
+                          selectedRef,
+                          selectedWaypoint.copyWith(type: value),
+                        );
+                      },
               ),
               const SizedBox(height: 10),
               Row(
                 children: <Widget>[
                   Expanded(
                     child: TextFormField(
-                      initialValue: selectedStep.pose.xMeters.toStringAsFixed(
-                        2,
-                      ),
+                      initialValue: selectedWaypoint.pose.xMeters
+                          .toStringAsFixed(2),
                       decoration: const InputDecoration(labelText: 'X'),
                       keyboardType: const TextInputType.numberWithOptions(
                         signed: true,
                         decimal: true,
                       ),
-                      onChanged: (String value) => onUpdateStep(
-                        selectedStep.copyWith(
-                          pose: selectedStep.pose.copyWith(
+                      onChanged: (String value) => onUpdateWaypoint(
+                        selectedRef!,
+                        selectedWaypoint.copyWith(
+                          pose: selectedWaypoint.pose.copyWith(
                             xMeters:
                                 double.tryParse(value) ??
-                                selectedStep.pose.xMeters,
+                                selectedWaypoint.pose.xMeters,
                           ),
                         ),
                       ),
@@ -3119,20 +3513,20 @@ class _EditorInspector extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: TextFormField(
-                      initialValue: selectedStep.pose.yMeters.toStringAsFixed(
-                        2,
-                      ),
+                      initialValue: selectedWaypoint.pose.yMeters
+                          .toStringAsFixed(2),
                       decoration: const InputDecoration(labelText: 'Y'),
                       keyboardType: const TextInputType.numberWithOptions(
                         signed: true,
                         decimal: true,
                       ),
-                      onChanged: (String value) => onUpdateStep(
-                        selectedStep.copyWith(
-                          pose: selectedStep.pose.copyWith(
+                      onChanged: (String value) => onUpdateWaypoint(
+                        selectedRef!,
+                        selectedWaypoint.copyWith(
+                          pose: selectedWaypoint.pose.copyWith(
                             yMeters:
                                 double.tryParse(value) ??
-                                selectedStep.pose.yMeters,
+                                selectedWaypoint.pose.yMeters,
                           ),
                         ),
                       ),
@@ -3141,35 +3535,62 @@ class _EditorInspector extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 10),
-              TextFormField(
-                initialValue: selectedStep.pose.headingDeg.toStringAsFixed(0),
-                decoration: const InputDecoration(labelText: 'Heading'),
-                keyboardType: const TextInputType.numberWithOptions(
-                  signed: true,
-                  decimal: true,
-                ),
-                onChanged: (String value) => onUpdateStep(
-                  selectedStep.copyWith(
-                    pose: selectedStep.pose.copyWith(
-                      headingDeg:
-                          double.tryParse(value) ??
-                          selectedStep.pose.headingDeg,
+              if (selectedWaypoint.type == PlannerWaypointType.pose ||
+                  (selectedRef != null &&
+                      selectedRef.routeWaypointIndex == null))
+                TextFormField(
+                  initialValue: selectedWaypoint.pose.headingDeg
+                      .toStringAsFixed(0),
+                  decoration: const InputDecoration(labelText: 'Heading'),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    signed: true,
+                    decimal: true,
+                  ),
+                  onChanged: (String value) => onUpdateWaypoint(
+                    selectedRef!,
+                    selectedWaypoint.copyWith(
+                      pose: selectedWaypoint.pose.copyWith(
+                        headingDeg:
+                            double.tryParse(value) ??
+                            selectedWaypoint.pose.headingDeg,
+                      ),
                     ),
                   ),
                 ),
-              ),
+              if (selectedRef != null &&
+                  selectedRef.routeWaypointIndex != null &&
+                  selectedWaypoint.type ==
+                      PlannerWaypointType.translation) ...<Widget>[
+                const SizedBox(height: 10),
+                _LabeledSlider(
+                  label: 'Bend Strength',
+                  value: selectedWaypoint.bendStrength,
+                  min: 0.1,
+                  max: 1.0,
+                  onChanged: (double value) => onUpdateWaypoint(
+                    selectedRef,
+                    selectedWaypoint.copyWith(bendStrength: value),
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
               _SettingsSection(
-                title: 'Pose Summary',
+                title: 'Waypoint Summary',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text('X ${selectedStep.pose.xMeters.toStringAsFixed(2)} m'),
-                    Text('Y ${selectedStep.pose.yMeters.toStringAsFixed(2)} m'),
                     Text(
-                      'Heading ${selectedStep.pose.headingDeg.toStringAsFixed(0)}°',
+                      'X ${selectedWaypoint.pose.xMeters.toStringAsFixed(2)} m',
                     ),
-                    Text('Waypoints ${selectedStep.routeWaypoints.length}'),
+                    Text(
+                      'Y ${selectedWaypoint.pose.yMeters.toStringAsFixed(2)} m',
+                    ),
+                    Text(
+                      'Heading ${selectedWaypoint.pose.headingDeg.toStringAsFixed(0)}°',
+                    ),
+                    Text(
+                      'Type ${selectedWaypoint.type == PlannerWaypointType.translation ? "Translation" : "Pose"}',
+                    ),
                   ],
                 ),
               ),
@@ -4067,6 +4488,7 @@ class _FieldEditor extends StatefulWidget {
     required this.onTap,
     this.onBeginDragEdit,
     this.onSelectStep,
+    this.onSelectWaypoint,
     this.onMoveStep,
     this.onMoveWaypoint,
     this.selectedZoneIndex,
@@ -4084,6 +4506,7 @@ class _FieldEditor extends StatefulWidget {
   final ValueChanged<Offset> onTap;
   final VoidCallback? onBeginDragEdit;
   final ValueChanged<int>? onSelectStep;
+  final ValueChanged<PlannerWaypointRef>? onSelectWaypoint;
   final void Function(int index, PlannerPose pose)? onMoveStep;
   final void Function(int stepIndex, int waypointIndex, PlannerPose pose)?
   onMoveWaypoint;
@@ -4305,7 +4728,7 @@ class _FieldEditorState extends State<_FieldEditor> {
         waypointIndex += 1
       ) {
         final double waypointDistance =
-            (_fieldPoseToCanvas(step.routeWaypoints[waypointIndex], size) -
+            (_fieldPoseToCanvas(step.routeWaypoints[waypointIndex].pose, size) -
                     localPosition)
                 .distance;
         if (waypointDistance < pointHitRadius &&
@@ -4350,6 +4773,9 @@ class _FieldEditorState extends State<_FieldEditor> {
     switch (target.type) {
       case _FieldDragTargetType.step:
         final PlannerStep step = widget.auto.steps[target.index];
+        widget.onSelectWaypoint?.call(
+          PlannerWaypointRef(stepIndex: target.index),
+        );
         widget.onSelectStep?.call(target.index);
         widget.onMoveStep?.call(
           target.index,
@@ -4364,6 +4790,12 @@ class _FieldEditorState extends State<_FieldEditor> {
             '${step.label}  x ${currentPose.xMeters.toStringAsFixed(2)}  y ${currentPose.yMeters.toStringAsFixed(2)}';
         break;
       case _FieldDragTargetType.waypoint:
+        widget.onSelectWaypoint?.call(
+          PlannerWaypointRef(
+            stepIndex: target.index,
+            routeWaypointIndex: target.secondaryIndex,
+          ),
+        );
         widget.onSelectStep?.call(target.index);
         widget.onMoveWaypoint?.call(
           target.index,
@@ -4470,7 +4902,18 @@ class _FieldEditorState extends State<_FieldEditor> {
     if (target != null && widget.tool == PlannerTool.select) {
       switch (target.type) {
         case _FieldDragTargetType.step:
+          widget.onSelectWaypoint?.call(
+            PlannerWaypointRef(stepIndex: target.index),
+          );
+          widget.onSelectStep?.call(target.index);
+          break;
         case _FieldDragTargetType.waypoint:
+          widget.onSelectWaypoint?.call(
+            PlannerWaypointRef(
+              stepIndex: target.index,
+              routeWaypointIndex: target.secondaryIndex,
+            ),
+          );
           widget.onSelectStep?.call(target.index);
           break;
         case _FieldDragTargetType.obstacleMove:
@@ -4712,7 +5155,9 @@ class _FieldPreviewPainter extends CustomPainter {
 
     final List<PlannerPose> route = <PlannerPose>[auto.startPose];
     for (final PlannerStep step in auto.steps) {
-      route.addAll(step.routeWaypoints);
+      route.addAll(
+        step.routeWaypoints.map((PlannerWaypoint waypoint) => waypoint.pose),
+      );
       route.add(step.pose);
     }
 
@@ -4721,7 +5166,7 @@ class _FieldPreviewPainter extends CustomPainter {
       final PlannerStep step = auto.steps[i];
       final List<PlannerPose> segment = <PlannerPose>[
         previous,
-        ...step.routeWaypoints,
+        ...step.routeWaypoints.map((PlannerWaypoint waypoint) => waypoint.pose),
         step.pose,
       ];
       final Paint pathPaint = Paint()
@@ -4770,11 +5215,11 @@ class _FieldPreviewPainter extends CustomPainter {
 
     for (int i = 0; i < auto.steps.length; i += 1) {
       final PlannerStep step = auto.steps[i];
-      for (final PlannerPose waypoint in step.routeWaypoints) {
+      for (final PlannerWaypoint waypoint in step.routeWaypoints) {
         _drawRobotBox(
           canvas,
           fieldRect,
-          waypoint,
+          waypoint.pose,
           step.requestedState.color,
           mini ? 0.35 : 0.48,
         );
@@ -5713,6 +6158,39 @@ class _ConstraintZoneEditor extends StatelessWidget {
           max: 1.0,
           onChanged: (double value) =>
               onChanged(zone.copyWith(constraintFactor: value)),
+        ),
+        _LabeledSlider(
+          label: 'Max Angular Vel Deg/S',
+          value: zone.maxAngularVelocityDegPerSec,
+          min: 30,
+          max: 540,
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(maxAngularVelocityDegPerSec: value)),
+        ),
+        _LabeledSlider(
+          label: 'Max Angular Accel Deg/S²',
+          value: zone.maxAngularAccelerationDegPerSecSq,
+          min: 30,
+          max: 720,
+          onChanged: (double value) => onChanged(
+            zone.copyWith(maxAngularAccelerationDegPerSecSq: value),
+          ),
+        ),
+        _LabeledSlider(
+          label: 'Tolerance Override',
+          value: zone.toleranceMetersOverride,
+          min: 0.01,
+          max: 0.25,
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(toleranceMetersOverride: value)),
+        ),
+        _LabeledSlider(
+          label: 'Pose Blend Override',
+          value: zone.poseBlendWeightOverride,
+          min: 0,
+          max: 1,
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(poseBlendWeightOverride: value)),
         ),
       ],
     );

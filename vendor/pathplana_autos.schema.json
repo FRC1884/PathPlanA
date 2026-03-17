@@ -19,6 +19,18 @@
         "$ref": "#/$defs/commandProfile"
       }
     },
+    "globalStartPoses": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/namedPose"
+      }
+    },
+    "globalVariables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/namedValue"
+      }
+    },
     "autos": {
       "type": "array",
       "items": {
@@ -177,6 +189,35 @@
         },
         "constraintFactor": {
           "type": "number"
+        },
+        "maxAngularVelocityDegPerSec": {
+          "type": "number"
+        },
+        "maxAngularAccelerationDegPerSecSq": {
+          "type": "number"
+        },
+        "toleranceMetersOverride": {
+          "type": "number"
+        },
+        "poseBlendWeightOverride": {
+          "type": "number"
+        }
+      }
+    },
+    "waypoint": {
+      "type": "object",
+      "required": [
+        "pose"
+      ],
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "bendStrength": {
+          "type": "number"
+        },
+        "pose": {
+          "$ref": "#/$defs/pose"
         }
       }
     },
@@ -235,7 +276,7 @@
         "routeWaypoints": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/pose"
+            "$ref": "#/$defs/waypoint"
           }
         },
         "plannerSettings": {
@@ -266,6 +307,47 @@
           "type": "string"
         },
         "description": {
+          "type": "string"
+        }
+      }
+    },
+    "namedPose": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "pose"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pose": {
+          "$ref": "#/$defs/pose"
+        }
+      }
+    },
+    "namedValue": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "value"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        },
+        "unit": {
           "type": "string"
         }
       }
