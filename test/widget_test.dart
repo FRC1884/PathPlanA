@@ -15,7 +15,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text("PathPlanA"), findsOneWidget);
-    expect(find.text("Autos"), findsOneWidget);
-    expect(find.text("Settings"), findsOneWidget);
+    expect(find.text("Auto Library"), findsOneWidget);
+    expect(find.text("Library"), findsOneWidget);
   });
 }

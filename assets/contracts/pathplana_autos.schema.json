@@ -13,6 +13,12 @@
     "generator": {
       "type": "string"
     },
+    "commandProfiles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/commandProfile"
+      }
+    },
     "autos": {
       "type": "array",
       "items": {
@@ -84,6 +90,12 @@
         "spotId": {
           "type": "string"
         },
+        "commandId": {
+          "type": "string"
+        },
+        "commandName": {
+          "type": "string"
+        },
         "label": {
           "type": "string"
         },
@@ -126,6 +138,32 @@
         "plannerSettings": {
           "type": "object",
           "additionalProperties": true
+        }
+      }
+    },
+    "commandProfile": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "requestedState",
+        "colorHex"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "requestedState": {
+          "type": "string"
+        },
+        "colorHex": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
         }
       }
     },

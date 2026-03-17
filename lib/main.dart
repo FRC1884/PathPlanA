@@ -3,9 +3,12 @@ import 'dart:math' as math;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 const double fieldLengthMeters = 17.548;
 const double fieldWidthMeters = 8.052;
+const String plannerIconAsset = 'assets/branding/pathplana_icon.svg';
+const String fieldBackgroundAsset = 'assets/field/rebuilt_field.svg';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -79,6 +82,8 @@ class PathPlanAApp extends StatelessWidget {
 
 enum PlannerTool { select, startPose, addStep, addWaypoint }
 
+enum PlannerSection { library, editor, obstacles, commands, settings }
+
 enum RequestedState {
   idling('IDLING', Color(0xFFE8EEFC)),
   intaking('INTAKING', Color(0xFF39D98A)),
@@ -97,6 +102,110 @@ enum RequestedState {
       orElse: () => RequestedState.idling,
     );
   }
+}
+
+class PlannerCommandProfile {
+  const PlannerCommandProfile({
+    required this.id,
+    required this.name,
+    required this.requestedState,
+    required this.colorHex,
+    this.description = '',
+  });
+
+  final String id;
+  final String name;
+  final String requestedState;
+  final String colorHex;
+  final String description;
+
+  Color get color =>
+      parseHexColor(colorHex) ?? requestedStateColor(requestedState);
+
+  PlannerCommandProfile copyWith({
+    String? id,
+    String? name,
+    String? requestedState,
+    String? colorHex,
+    String? description,
+  }) {
+    return PlannerCommandProfile(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      requestedState: requestedState ?? this.requestedState,
+      colorHex: colorHex ?? this.colorHex,
+      description: description ?? this.description,
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'id': id,
+    'name': name,
+    'requestedState': requestedState,
+    'colorHex': colorHex,
+    'description': description,
+  };
+
+  static PlannerCommandProfile fromJson(Map<String, dynamic> json) {
+    return PlannerCommandProfile(
+      id: json['id'] as String? ?? 'command',
+      name: json['name'] as String? ?? 'Command',
+      requestedState: json['requestedState'] as String? ?? 'IDLING',
+      colorHex: json['colorHex'] as String? ?? '#E8EEFC',
+      description: json['description'] as String? ?? '',
+    );
+  }
+}
+
+Color requestedStateColor(String stateToken) {
+  return RequestedState.fromToken(stateToken).color;
+}
+
+Color? parseHexColor(String value) {
+  final String trimmed = value.trim().replaceFirst('#', '');
+  if (trimmed.length != 6 && trimmed.length != 8) {
+    return null;
+  }
+  final String normalized = trimmed.length == 6 ? 'FF$trimmed' : trimmed;
+  final int? parsed = int.tryParse(normalized, radix: 16);
+  return parsed == null ? null : Color(parsed);
+}
+
+String colorToHex(Color color) {
+  return '#${color.toARGB32().toRadixString(16).substring(2).toUpperCase()}';
+}
+
+List<PlannerCommandProfile> defaultCommandProfiles() {
+  return <PlannerCommandProfile>[
+    PlannerCommandProfile(
+      id: 'cmd-idle',
+      name: 'Hold Idle',
+      requestedState: 'IDLING',
+      colorHex: '#E8EEFC',
+      description: 'Keep the superstructure parked.',
+    ),
+    PlannerCommandProfile(
+      id: 'cmd-intake',
+      name: 'Rear Intake',
+      requestedState: 'INTAKING',
+      colorHex: '#39D98A',
+      description: 'Drive in with the intake on the back.',
+    ),
+    PlannerCommandProfile(
+      id: 'cmd-score',
+      name: 'Shoot Cycle',
+      requestedState: 'SHOOTING',
+      colorHex: '#FFD166',
+      description: 'Prepare to score at the target.',
+    ),
+    PlannerCommandProfile(
+      id: 'cmd-ferry',
+      name: 'Ferry Move',
+      requestedState: 'FERRYING',
+      colorHex: '#90CDF4',
+      description: 'Transit while staged for a ferry action.',
+    ),
+  ];
 }
 
 class PlannerPose {
@@ -151,6 +260,26 @@ class PlannerZone {
   final double xMaxMeters;
   final double yMaxMeters;
   final bool locked;
+
+  PlannerZone copyWith({
+    String? id,
+    String? label,
+    double? xMinMeters,
+    double? yMinMeters,
+    double? xMaxMeters,
+    double? yMaxMeters,
+    bool? locked,
+  }) {
+    return PlannerZone(
+      id: id ?? this.id,
+      label: label ?? this.label,
+      xMinMeters: xMinMeters ?? this.xMinMeters,
+      yMinMeters: yMinMeters ?? this.yMinMeters,
+      xMaxMeters: xMaxMeters ?? this.xMaxMeters,
+      yMaxMeters: yMaxMeters ?? this.yMaxMeters,
+      locked: locked ?? this.locked,
+    );
+  }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'id': id,
@@ -289,6 +418,8 @@ class PlannerStep {
     required this.pose,
     this.group = 'LANE',
     this.spotId = '',
+    this.commandId = '',
+    this.commandName = '',
     this.routeWaypoints = const <PlannerPose>[],
   });
 
@@ -298,6 +429,8 @@ class PlannerStep {
   final PlannerPose pose;
   final String group;
   final String spotId;
+  final String commandId;
+  final String commandName;
   final List<PlannerPose> routeWaypoints;
 
   PlannerStep copyWith({
@@ -307,6 +440,8 @@ class PlannerStep {
     PlannerPose? pose,
     String? group,
     String? spotId,
+    String? commandId,
+    String? commandName,
     List<PlannerPose>? routeWaypoints,
   }) {
     return PlannerStep(
@@ -316,6 +451,8 @@ class PlannerStep {
       pose: pose ?? this.pose,
       group: group ?? this.group,
       spotId: spotId ?? this.spotId,
+      commandId: commandId ?? this.commandId,
+      commandName: commandName ?? this.commandName,
       routeWaypoints: routeWaypoints ?? this.routeWaypoints,
     );
   }
@@ -324,6 +461,8 @@ class PlannerStep {
     'spotId': spotId,
     'label': label,
     'group': group,
+    'commandId': commandId,
+    'commandName': commandName,
     'requestedState': requestedState.token,
     'xMeters': pose.xMeters,
     'yMeters': pose.yMeters,
@@ -349,6 +488,8 @@ class PlannerStep {
       ),
       group: json['group'] as String? ?? 'LANE',
       spotId: json['spotId'] as String? ?? '',
+      commandId: json['commandId'] as String? ?? '',
+      commandName: json['commandName'] as String? ?? '',
       routeWaypoints: (json['routeWaypoints'] as List<dynamic>? ?? const [])
           .map(
             (dynamic pose) =>
@@ -491,15 +632,20 @@ class PlannerPackage {
     required this.version,
     required this.generator,
     required this.autos,
+    required this.commandProfiles,
   });
 
   final String version;
   final String generator;
   final List<PlannerAuto> autos;
+  final List<PlannerCommandProfile> commandProfiles;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'version': version,
     'generator': generator,
+    'commandProfiles': commandProfiles
+        .map((PlannerCommandProfile command) => command.toJson())
+        .toList(),
     'autos': autos.map((auto) => auto.toJson()).toList(),
   };
 
@@ -511,6 +657,7 @@ class PlannerPackage {
     return PlannerPackage(
       version: '2026.1',
       generator: 'PathPlanA',
+      commandProfiles: defaultCommandProfiles(),
       autos: <PlannerAuto>[
         PlannerAuto.sample(),
         PlannerAuto.sample().copyWith(
@@ -555,6 +702,7 @@ class PlannerPackage {
       return PlannerPackage(
         version: '2026.1',
         generator: 'Imported',
+        commandProfiles: defaultCommandProfiles(),
         autos: parsed
             .map(
               (dynamic auto) =>
@@ -568,9 +716,20 @@ class PlannerPackage {
         'Planner package must be an object or an array.',
       );
     }
+    final List<PlannerCommandProfile> importedProfiles =
+        (parsed['commandProfiles'] as List<dynamic>? ?? const [])
+            .map(
+              (dynamic command) => PlannerCommandProfile.fromJson(
+                command as Map<String, dynamic>,
+              ),
+            )
+            .toList();
     return PlannerPackage(
       version: parsed['version'] as String? ?? '2026.1',
       generator: parsed['generator'] as String? ?? 'Imported',
+      commandProfiles: importedProfiles.isEmpty
+          ? defaultCommandProfiles()
+          : importedProfiles,
       autos: (parsed['autos'] as List<dynamic>? ?? const [])
           .map(
             (dynamic auto) =>
@@ -592,13 +751,18 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
   PlannerPackage _package = PlannerPackage.sample();
   int _selectedAutoIndex = 0;
   int? _selectedStepIndex;
+  int? _selectedZoneIndex;
   PlannerTool _tool = PlannerTool.select;
-  RequestedState _draftState = RequestedState.intaking;
+  PlannerSection _selectedSection = PlannerSection.library;
+  String _draftCommandId = 'cmd-intake';
   double _draftHeadingDeg = 180;
   String _statusMessage = 'Ready to author autos locally.';
   String _schemaSummary = 'Loading schema...';
 
   PlannerAuto get _selectedAuto => _package.autos[_selectedAutoIndex];
+  List<PlannerCommandProfile> get _commandProfiles => _package.commandProfiles;
+  PlannerCommandProfile get _draftCommand =>
+      _resolveCommandProfileById(_draftCommandId) ?? _commandProfiles.first;
 
   @override
   void initState() {
@@ -615,6 +779,15 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       _schemaSummary =
           '${schema['title']} • ${(schema['\$defs'] as Map<String, dynamic>).keys.length} defs';
     });
+  }
+
+  PlannerCommandProfile? _resolveCommandProfileById(String id) {
+    for (final PlannerCommandProfile profile in _commandProfiles) {
+      if (profile.id == id) {
+        return profile;
+      }
+    }
+    return null;
   }
 
   Future<void> _importPackage() async {
@@ -638,6 +811,10 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       _package = imported;
       _selectedAutoIndex = 0;
       _selectedStepIndex = imported.autos.first.steps.isNotEmpty ? 0 : null;
+      _selectedZoneIndex = imported.autos.first.customZones.isNotEmpty
+          ? 0
+          : null;
+      _draftCommandId = imported.commandProfiles.first.id;
       _statusMessage =
           'Imported ${imported.autos.length} auto${imported.autos.length == 1 ? '' : 's'} from ${file.name}.';
     });
@@ -683,9 +860,12 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
         version: _package.version,
         generator: _package.generator,
         autos: <PlannerAuto>[..._package.autos, auto],
+        commandProfiles: _package.commandProfiles,
       );
       _selectedAutoIndex = _package.autos.length - 1;
       _selectedStepIndex = null;
+      _selectedZoneIndex = auto.customZones.isNotEmpty ? 0 : null;
+      _selectedSection = PlannerSection.editor;
       _statusMessage = 'Created ${auto.name}.';
     });
   }
@@ -701,9 +881,13 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
         version: _package.version,
         generator: _package.generator,
         autos: autos,
+        commandProfiles: _package.commandProfiles,
       );
       _selectedAutoIndex = math.min(_selectedAutoIndex, autos.length - 1);
       _selectedStepIndex = autos[_selectedAutoIndex].steps.isEmpty ? null : 0;
+      _selectedZoneIndex = autos[_selectedAutoIndex].customZones.isEmpty
+          ? null
+          : 0;
       _statusMessage = 'Deleted selected auto.';
     });
   }
@@ -712,6 +896,8 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
     setState(() {
       _selectedAutoIndex = index;
       _selectedStepIndex = _selectedAuto.steps.isEmpty ? null : 0;
+      _selectedZoneIndex = _selectedAuto.customZones.isEmpty ? null : 0;
+      _selectedSection = PlannerSection.editor;
       _statusMessage = 'Previewing ${_selectedAuto.name}.';
     });
   }
@@ -724,6 +910,7 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
         version: _package.version,
         generator: _package.generator,
         autos: autos,
+        commandProfiles: _package.commandProfiles,
       );
     });
   }
@@ -748,15 +935,19 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
           PlannerStep(
             id: 'step-${DateTime.now().microsecondsSinceEpoch}',
             label: 'Step ${_selectedAuto.steps.length + 1}',
-            requestedState: _draftState,
+            requestedState: RequestedState.fromToken(
+              _draftCommand.requestedState,
+            ),
             pose: pose,
             group: 'LANE',
+            commandId: _draftCommand.id,
+            commandName: _draftCommand.name,
           ),
         ];
         _updateSelectedAuto(_selectedAuto.copyWith(steps: steps));
         setState(() {
           _selectedStepIndex = steps.length - 1;
-          _statusMessage = 'Added ${_draftState.token} step.';
+          _statusMessage = 'Added ${_draftCommand.name} step.';
         });
       case PlannerTool.addWaypoint:
         if (_selectedStepIndex == null) {
@@ -800,18 +991,86 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
     });
   }
 
+  void _updateCommandProfiles(List<PlannerCommandProfile> profiles) {
+    setState(() {
+      _package = PlannerPackage(
+        version: _package.version,
+        generator: _package.generator,
+        autos: _package.autos,
+        commandProfiles: profiles,
+      );
+      if (!profiles.any(
+        (PlannerCommandProfile profile) => profile.id == _draftCommandId,
+      )) {
+        _draftCommandId = profiles.first.id;
+      }
+    });
+  }
+
+  void _addZone() {
+    final List<PlannerZone> zones = <PlannerZone>[
+      ..._selectedAuto.customZones,
+      PlannerZone(
+        id: 'zone-${DateTime.now().microsecondsSinceEpoch}',
+        label: 'Keep-Out ${_selectedAuto.customZones.length + 1}',
+        xMinMeters: 6.2,
+        yMinMeters: 2.2,
+        xMaxMeters: 7.2,
+        yMaxMeters: 3.2,
+      ),
+    ];
+    _updateSelectedAuto(_selectedAuto.copyWith(customZones: zones));
+    setState(() {
+      _selectedZoneIndex = zones.length - 1;
+      _selectedSection = PlannerSection.obstacles;
+      _statusMessage = 'Added a new keep-out box.';
+    });
+  }
+
+  void _updateZone(int index, PlannerZone zone) {
+    final List<PlannerZone> zones = <PlannerZone>[..._selectedAuto.customZones];
+    zones[index] = zone;
+    _updateSelectedAuto(_selectedAuto.copyWith(customZones: zones));
+  }
+
+  void _deleteZone(int index) {
+    final List<PlannerZone> zones = <PlannerZone>[..._selectedAuto.customZones]
+      ..removeAt(index);
+    _updateSelectedAuto(_selectedAuto.copyWith(customZones: zones));
+    setState(() {
+      _selectedZoneIndex = zones.isEmpty
+          ? null
+          : math.min(index, zones.length - 1);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final Color textMuted = const Color(0xFF94A0B8);
     return Scaffold(
       appBar: AppBar(
-        title: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        title: Row(
           children: <Widget>[
-            Text('PathPlanA'),
-            Text(
-              'Local REBUILT auto authoring',
-              style: TextStyle(fontSize: 12, color: Color(0xFF94A0B8)),
+            Container(
+              width: 44,
+              height: 44,
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF11161F),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF273246)),
+              ),
+              child: SvgPicture.asset(plannerIconAsset),
+            ),
+            const SizedBox(width: 12),
+            const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('PathPlanA'),
+                Text(
+                  'Local REBUILT auto authoring',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF94A0B8)),
+                ),
+              ],
             ),
           ],
         ),
@@ -836,185 +1095,125 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       ),
       body: Row(
         children: <Widget>[
-          SizedBox(
-            width: 320,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 16),
-              child: Column(
-                children: <Widget>[
-                  _StatusBanner(
-                    message: _statusMessage,
-                    schemaSummary: _schemaSummary,
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: <Widget>[
-                                const Text(
-                                  'Autos',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 0.8,
-                                  ),
-                                ),
-                                IconButton(
-                                  onPressed: _deleteSelectedAuto,
-                                  icon: const Icon(Icons.delete_outline),
-                                  tooltip: 'Delete selected auto',
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Expanded(
-                              child: ListView.separated(
-                                itemBuilder: (BuildContext context, int index) {
-                                  final PlannerAuto auto =
-                                      _package.autos[index];
-                                  return _AutoGalleryCard(
-                                    auto: auto,
-                                    selected: index == _selectedAutoIndex,
-                                    onTap: () => _selectAuto(index),
-                                  );
-                                },
-                                separatorBuilder:
-                                    (BuildContext context, int index) =>
-                                        const SizedBox(height: 10),
-                                itemCount: _package.autos.length,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 0, 16),
+            child: NavigationRail(
+              selectedIndex: _selectedSection.index,
+              onDestinationSelected: (int index) {
+                setState(() {
+                  _selectedSection = PlannerSection.values[index];
+                });
+              },
+              backgroundColor: const Color(0xFF11161F),
+              indicatorColor: const Color(0x26FFD166),
+              extended: false,
+              destinations: const <NavigationRailDestination>[
+                NavigationRailDestination(
+                  icon: Icon(Icons.dashboard_customize_outlined),
+                  selectedIcon: Icon(Icons.dashboard_customize),
+                  label: Text('Library'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.route_outlined),
+                  selectedIcon: Icon(Icons.route),
+                  label: Text('Editor'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.crop_square_outlined),
+                  selectedIcon: Icon(Icons.crop_square),
+                  label: Text('Obstacles'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.tune_outlined),
+                  selectedIcon: Icon(Icons.tune),
+                  label: Text('Commands'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.settings_outlined),
+                  selectedIcon: Icon(Icons.settings),
+                  label: Text('Settings'),
+                ),
+              ],
             ),
           ),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
-              child: Column(
+              padding: const EdgeInsets.fromLTRB(12, 12, 16, 16),
+              child: IndexedStack(
+                index: _selectedSection.index,
                 children: <Widget>[
-                  _ToolStrip(
+                  _LibrarySection(
+                    package: _package,
+                    selectedAutoIndex: _selectedAutoIndex,
+                    statusMessage: _statusMessage,
+                    schemaSummary: _schemaSummary,
+                    onSelectAuto: _selectAuto,
+                    onDeleteSelectedAuto: _deleteSelectedAuto,
+                  ),
+                  _EditorSection(
+                    auto: _selectedAuto,
+                    commandProfiles: _commandProfiles,
+                    selectedStepIndex: _selectedStepIndex,
                     tool: _tool,
-                    draftState: _draftState,
+                    draftCommandId: _draftCommandId,
                     draftHeadingDeg: _draftHeadingDeg,
                     onToolChanged: (PlannerTool tool) =>
                         setState(() => _tool = tool),
-                    onStateChanged: (RequestedState state) =>
-                        setState(() => _draftState = state),
+                    onDraftCommandChanged: (String value) =>
+                        setState(() => _draftCommandId = value),
                     onHeadingChanged: (double value) =>
                         setState(() => _draftHeadingDeg = value),
+                    onTap: _handleCanvasTap,
+                    onSelectStep: (int index) =>
+                        setState(() => _selectedStepIndex = index),
+                    onDeleteStep: (int index) {
+                      final List<PlannerStep> steps = <PlannerStep>[
+                        ..._selectedAuto.steps,
+                      ]..removeAt(index);
+                      _updateSelectedAuto(_selectedAuto.copyWith(steps: steps));
+                      setState(() {
+                        _selectedStepIndex = steps.isEmpty
+                            ? null
+                            : math.min(index, steps.length - 1);
+                      });
+                    },
                   ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Row(
-                              children: <Widget>[
-                                Expanded(
-                                  child: Text(
-                                    _selectedAuto.name,
-                                    style: const TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  '${_selectedAuto.steps.length} steps',
-                                  style: TextStyle(color: textMuted),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Expanded(
-                              child: Row(
-                                children: <Widget>[
-                                  Expanded(
-                                    flex: 5,
-                                    child: _FieldEditor(
-                                      auto: _selectedAuto,
-                                      selectedStepIndex: _selectedStepIndex,
-                                      onTap: _handleCanvasTap,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    flex: 3,
-                                    child: _StepListPanel(
-                                      auto: _selectedAuto,
-                                      selectedStepIndex: _selectedStepIndex,
-                                      onSelectStep: (int index) => setState(
-                                        () => _selectedStepIndex = index,
-                                      ),
-                                      onDeleteStep: (int index) {
-                                        final List<PlannerStep> steps =
-                                            <PlannerStep>[
-                                              ..._selectedAuto.steps,
-                                            ]..removeAt(index);
-                                        _updateSelectedAuto(
-                                          _selectedAuto.copyWith(steps: steps),
-                                        );
-                                        setState(() {
-                                          _selectedStepIndex = steps.isEmpty
-                                              ? null
-                                              : math.min(
-                                                  index,
-                                                  steps.length - 1,
-                                                );
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                  _ObstacleSection(
+                    auto: _selectedAuto,
+                    selectedZoneIndex: _selectedZoneIndex,
+                    onSelectZone: (int index) =>
+                        setState(() => _selectedZoneIndex = index),
+                    onAddZone: _addZone,
+                    onUpdateZone: _updateZone,
+                    onDeleteZone: _deleteZone,
+                  ),
+                  _CommandsSection(
+                    commandProfiles: _commandProfiles,
+                    onUpdateProfiles: _updateCommandProfiles,
+                  ),
+                  _SettingsPanel(
+                    auto: _selectedAuto,
+                    commandProfiles: _commandProfiles,
+                    selectedStepIndex: _selectedStepIndex,
+                    onRenameAuto: (String value) => _updateSelectedAuto(
+                      _selectedAuto.copyWith(name: value),
                     ),
+                    onUpdateSettings: (PlannerSettings settings) =>
+                        _updateSelectedAuto(
+                          _selectedAuto.copyWith(settings: settings),
+                        ),
+                    onUpdateStep: (PlannerStep step) {
+                      if (_selectedStepIndex == null) {
+                        return;
+                      }
+                      final List<PlannerStep> steps = <PlannerStep>[
+                        ..._selectedAuto.steps,
+                      ];
+                      steps[_selectedStepIndex!] = step;
+                      _updateSelectedAuto(_selectedAuto.copyWith(steps: steps));
+                    },
                   ),
                 ],
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 360,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 12, 16, 16),
-              child: _SettingsPanel(
-                auto: _selectedAuto,
-                selectedStepIndex: _selectedStepIndex,
-                onRenameAuto: (String value) =>
-                    _updateSelectedAuto(_selectedAuto.copyWith(name: value)),
-                onUpdateSettings: (PlannerSettings settings) =>
-                    _updateSelectedAuto(
-                      _selectedAuto.copyWith(settings: settings),
-                    ),
-                onUpdateStep: (PlannerStep step) {
-                  if (_selectedStepIndex == null) {
-                    return;
-                  }
-                  final List<PlannerStep> steps = <PlannerStep>[
-                    ..._selectedAuto.steps,
-                  ];
-                  steps[_selectedStepIndex!] = step;
-                  _updateSelectedAuto(_selectedAuto.copyWith(steps: steps));
-                },
               ),
             ),
           ),
@@ -1024,11 +1223,364 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
   }
 }
 
-class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.message, required this.schemaSummary});
+class _LibrarySection extends StatelessWidget {
+  const _LibrarySection({
+    required this.package,
+    required this.selectedAutoIndex,
+    required this.statusMessage,
+    required this.schemaSummary,
+    required this.onSelectAuto,
+    required this.onDeleteSelectedAuto,
+  });
 
-  final String message;
+  final PlannerPackage package;
+  final int selectedAutoIndex;
+  final String statusMessage;
   final String schemaSummary;
+  final ValueChanged<int> onSelectAuto;
+  final VoidCallback onDeleteSelectedAuto;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Row(
+                    children: <Widget>[
+                      Container(
+                        width: 84,
+                        height: 84,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0B0E14),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: const Color(0xFF273246)),
+                        ),
+                        child: SvgPicture.asset(plannerIconAsset),
+                      ),
+                      const SizedBox(width: 18),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            const Text(
+                              'Auto Library',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Start here, pick an auto, then open the editor.',
+                              style: TextStyle(color: Color(0xFF94A0B8)),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              statusMessage,
+                              style: const TextStyle(color: Color(0xFFE8EEFC)),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              schemaSummary,
+                              style: const TextStyle(
+                                color: Color(0xFF94A0B8),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            IconButton(
+              onPressed: onDeleteSelectedAuto,
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete selected auto',
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: GridView.builder(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.1,
+            ),
+            itemCount: package.autos.length,
+            itemBuilder: (BuildContext context, int index) {
+              final PlannerAuto auto = package.autos[index];
+              return _AutoGalleryCard(
+                auto: auto,
+                selected: index == selectedAutoIndex,
+                onTap: () => onSelectAuto(index),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EditorSection extends StatelessWidget {
+  const _EditorSection({
+    required this.auto,
+    required this.commandProfiles,
+    required this.selectedStepIndex,
+    required this.tool,
+    required this.draftCommandId,
+    required this.draftHeadingDeg,
+    required this.onToolChanged,
+    required this.onDraftCommandChanged,
+    required this.onHeadingChanged,
+    required this.onTap,
+    required this.onSelectStep,
+    required this.onDeleteStep,
+  });
+
+  final PlannerAuto auto;
+  final List<PlannerCommandProfile> commandProfiles;
+  final int? selectedStepIndex;
+  final PlannerTool tool;
+  final String draftCommandId;
+  final double draftHeadingDeg;
+  final ValueChanged<PlannerTool> onToolChanged;
+  final ValueChanged<String> onDraftCommandChanged;
+  final ValueChanged<double> onHeadingChanged;
+  final ValueChanged<Offset> onTap;
+  final ValueChanged<int> onSelectStep;
+  final ValueChanged<int> onDeleteStep;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: <Widget>[
+        _ToolStrip(
+          tool: tool,
+          commandProfiles: commandProfiles,
+          draftCommandId: draftCommandId,
+          draftHeadingDeg: draftHeadingDeg,
+          onToolChanged: onToolChanged,
+          onDraftCommandChanged: onDraftCommandChanged,
+          onHeadingChanged: onHeadingChanged,
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          auto.name,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${auto.steps.length} steps',
+                        style: const TextStyle(color: Color(0xFF94A0B8)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          flex: 5,
+                          child: _FieldEditor(
+                            auto: auto,
+                            selectedStepIndex: selectedStepIndex,
+                            onTap: onTap,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 3,
+                          child: _StepListPanel(
+                            auto: auto,
+                            commandProfiles: commandProfiles,
+                            selectedStepIndex: selectedStepIndex,
+                            onSelectStep: onSelectStep,
+                            onDeleteStep: onDeleteStep,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ObstacleSection extends StatelessWidget {
+  const _ObstacleSection({
+    required this.auto,
+    required this.selectedZoneIndex,
+    required this.onSelectZone,
+    required this.onAddZone,
+    required this.onUpdateZone,
+    required this.onDeleteZone,
+  });
+
+  final PlannerAuto auto;
+  final int? selectedZoneIndex;
+  final ValueChanged<int> onSelectZone;
+  final VoidCallback onAddZone;
+  final void Function(int index, PlannerZone zone) onUpdateZone;
+  final ValueChanged<int> onDeleteZone;
+
+  @override
+  Widget build(BuildContext context) {
+    final PlannerZone? selectedZone = selectedZoneIndex == null
+        ? null
+        : auto.customZones[selectedZoneIndex!];
+    return Row(
+      children: <Widget>[
+        Expanded(
+          flex: 5,
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: _FieldEditor(
+                auto: auto,
+                selectedStepIndex: null,
+                onTap: (_) {},
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 4,
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      const Expanded(
+                        child: Text(
+                          'Obstacle Boxes',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: onAddZone,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: auto.customZones.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (BuildContext context, int index) {
+                        final PlannerZone zone = auto.customZones[index];
+                        final bool selected = index == selectedZoneIndex;
+                        return Material(
+                          color: selected
+                              ? const Color(0x26FF6384)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(14),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () => onSelectZone(index),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: <Widget>[
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        Text(
+                                          zone.label,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        Text(
+                                          '${zone.xMinMeters.toStringAsFixed(2)}, ${zone.yMinMeters.toStringAsFixed(2)} → ${zone.xMaxMeters.toStringAsFixed(2)}, ${zone.yMaxMeters.toStringAsFixed(2)}',
+                                          style: const TextStyle(
+                                            color: Color(0xFF94A0B8),
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () => onDeleteZone(index),
+                                    icon: const Icon(Icons.delete_outline),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (selectedZone != null)
+                    _ZoneEditor(
+                      zone: selectedZone,
+                      onChanged: (PlannerZone zone) =>
+                          onUpdateZone(selectedZoneIndex!, zone),
+                    )
+                  else
+                    const Text(
+                      'Add or select a keep-out box to edit it.',
+                      style: TextStyle(color: Color(0xFF94A0B8)),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CommandsSection extends StatelessWidget {
+  const _CommandsSection({
+    required this.commandProfiles,
+    required this.onUpdateProfiles,
+  });
+
+  final List<PlannerCommandProfile> commandProfiles;
+  final ValueChanged<List<PlannerCommandProfile>> onUpdateProfiles;
 
   @override
   Widget build(BuildContext context) {
@@ -1038,16 +1590,59 @@ class _StatusBanner extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            const Text(
-              'Planner Status',
-              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
+            Row(
+              children: <Widget>[
+                const Expanded(
+                  child: Text(
+                    'Named Commands',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    final List<PlannerCommandProfile> profiles =
+                        <PlannerCommandProfile>[
+                          ...commandProfiles,
+                          PlannerCommandProfile(
+                            id: 'cmd-${DateTime.now().microsecondsSinceEpoch}',
+                            name: 'New Command',
+                            requestedState: 'IDLING',
+                            colorHex: '#E8EEFC',
+                          ),
+                        ];
+                    onUpdateProfiles(profiles);
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add'),
+                ),
+              ],
             ),
-            const SizedBox(height: 10),
-            Text(message),
-            const SizedBox(height: 6),
-            Text(
-              schemaSummary,
-              style: const TextStyle(color: Color(0xFF94A0B8), fontSize: 12),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.separated(
+                itemCount: commandProfiles.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (BuildContext context, int index) {
+                  final PlannerCommandProfile profile = commandProfiles[index];
+                  return _CommandProfileCard(
+                    profile: profile,
+                    onChanged: (PlannerCommandProfile next) {
+                      final List<PlannerCommandProfile> profiles =
+                          <PlannerCommandProfile>[...commandProfiles];
+                      profiles[index] = next;
+                      onUpdateProfiles(profiles);
+                    },
+                    onDelete: commandProfiles.length <= 1
+                        ? null
+                        : () {
+                            final List<PlannerCommandProfile> profiles =
+                                <PlannerCommandProfile>[...commandProfiles]
+                                  ..removeAt(index);
+                            onUpdateProfiles(profiles);
+                          },
+                  );
+                },
+              ),
             ),
           ],
         ),
@@ -1120,18 +1715,20 @@ class _AutoGalleryCard extends StatelessWidget {
 class _ToolStrip extends StatelessWidget {
   const _ToolStrip({
     required this.tool,
-    required this.draftState,
+    required this.commandProfiles,
+    required this.draftCommandId,
     required this.draftHeadingDeg,
     required this.onToolChanged,
-    required this.onStateChanged,
+    required this.onDraftCommandChanged,
     required this.onHeadingChanged,
   });
 
   final PlannerTool tool;
-  final RequestedState draftState;
+  final List<PlannerCommandProfile> commandProfiles;
+  final String draftCommandId;
   final double draftHeadingDeg;
   final ValueChanged<PlannerTool> onToolChanged;
-  final ValueChanged<RequestedState> onStateChanged;
+  final ValueChanged<String> onDraftCommandChanged;
   final ValueChanged<double> onHeadingChanged;
 
   @override
@@ -1165,18 +1762,18 @@ class _ToolStrip extends StatelessWidget {
               onTap: () => onToolChanged(PlannerTool.addWaypoint),
             ),
             const SizedBox(width: 8),
-            DropdownButton<RequestedState>(
-              value: draftState,
-              onChanged: (RequestedState? state) {
-                if (state != null) {
-                  onStateChanged(state);
+            DropdownButton<String>(
+              value: draftCommandId,
+              onChanged: (String? commandId) {
+                if (commandId != null) {
+                  onDraftCommandChanged(commandId);
                 }
               },
-              items: RequestedState.values
+              items: commandProfiles
                   .map(
-                    (RequestedState state) => DropdownMenuItem<RequestedState>(
-                      value: state,
-                      child: Text(state.token),
+                    (PlannerCommandProfile profile) => DropdownMenuItem<String>(
+                      value: profile.id,
+                      child: Text(profile.name),
                     ),
                   )
                   .toList(),
@@ -1265,13 +1862,25 @@ class _FieldEditor extends StatelessWidget {
               );
               onTap(field);
             },
-            child: CustomPaint(
-              painter: _FieldPreviewPainter(
-                auto: auto,
-                selectedStepIndex: selectedStepIndex,
-                mini: false,
-              ),
-              child: const SizedBox.expand(),
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: SvgPicture.asset(
+                    fieldBackgroundAsset,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+                CustomPaint(
+                  painter: _FieldPreviewPainter(
+                    auto: auto,
+                    selectedStepIndex: selectedStepIndex,
+                    mini: false,
+                  ),
+                  child: const SizedBox.expand(),
+                ),
+              ],
             ),
           ),
         );
@@ -1294,17 +1903,6 @@ class _FieldPreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final Rect rect = Offset.zero & size;
-    final Paint background = Paint()
-      ..shader = const LinearGradient(
-        colors: <Color>[Color(0xFF0E1420), Color(0xFF0A1018)],
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-      ).createShader(rect);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, const Radius.circular(18)),
-      background,
-    );
-
     final Paint border = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = mini ? 1 : 1.4
@@ -1416,8 +2014,14 @@ class _FieldPreviewPainter extends CustomPainter {
     double scale,
   ) {
     final Offset center = _toCanvas(pose, size);
-    final double width = (0.6985 / fieldLengthMeters) * size.width * scale;
-    final double height = (0.6985 / fieldWidthMeters) * size.height * scale;
+    final double width =
+        (auto.settings.robotLengthMeters / fieldLengthMeters) *
+        size.width *
+        scale;
+    final double height =
+        (auto.settings.robotWidthMeters / fieldWidthMeters) *
+        size.height *
+        scale;
     canvas.save();
     canvas.translate(center.dx, center.dy);
     canvas.rotate(-pose.headingDeg * math.pi / 180);
@@ -1455,12 +2059,14 @@ class _FieldPreviewPainter extends CustomPainter {
 class _StepListPanel extends StatelessWidget {
   const _StepListPanel({
     required this.auto,
+    required this.commandProfiles,
     required this.selectedStepIndex,
     required this.onSelectStep,
     required this.onDeleteStep,
   });
 
   final PlannerAuto auto;
+  final List<PlannerCommandProfile> commandProfiles;
   final int? selectedStepIndex;
   final ValueChanged<int> onSelectStep;
   final ValueChanged<int> onDeleteStep;
@@ -1490,11 +2096,22 @@ class _StepListPanel extends StatelessWidget {
                   : ListView.separated(
                       itemBuilder: (BuildContext context, int index) {
                         final PlannerStep step = auto.steps[index];
+                        PlannerCommandProfile? profile;
+                        for (final PlannerCommandProfile entry
+                            in commandProfiles) {
+                          if (entry.id == step.commandId) {
+                            profile = entry;
+                            break;
+                          }
+                        }
+                        final Color stepColor =
+                            profile?.color ?? step.requestedState.color;
+                        final String stepName = step.commandName.isNotEmpty
+                            ? step.commandName
+                            : profile?.name ?? step.requestedState.token;
                         return Material(
                           color: index == selectedStepIndex
-                              ? step.requestedState.color.withValues(
-                                  alpha: 0.12,
-                                )
+                              ? stepColor.withValues(alpha: 0.12)
                               : Colors.transparent,
                           borderRadius: BorderRadius.circular(14),
                           child: InkWell(
@@ -1509,8 +2126,7 @@ class _StepListPanel extends StatelessWidget {
                                     height: 28,
                                     decoration: BoxDecoration(
                                       borderRadius: BorderRadius.circular(8),
-                                      color: step.requestedState.color
-                                          .withValues(alpha: 0.18),
+                                      color: stepColor.withValues(alpha: 0.18),
                                     ),
                                     alignment: Alignment.center,
                                     child: Text('${index + 1}'),
@@ -1528,7 +2144,7 @@ class _StepListPanel extends StatelessWidget {
                                           ),
                                         ),
                                         Text(
-                                          '${step.requestedState.token} • ${step.routeWaypoints.length} wp',
+                                          '$stepName • ${step.routeWaypoints.length} wp',
                                           style: const TextStyle(
                                             color: Color(0xFF94A0B8),
                                             fontSize: 12,
@@ -1562,6 +2178,7 @@ class _StepListPanel extends StatelessWidget {
 class _SettingsPanel extends StatelessWidget {
   const _SettingsPanel({
     required this.auto,
+    required this.commandProfiles,
     required this.selectedStepIndex,
     required this.onRenameAuto,
     required this.onUpdateSettings,
@@ -1569,6 +2186,7 @@ class _SettingsPanel extends StatelessWidget {
   });
 
   final PlannerAuto auto;
+  final List<PlannerCommandProfile> commandProfiles;
   final int? selectedStepIndex;
   final ValueChanged<String> onRenameAuto;
   final ValueChanged<PlannerSettings> onUpdateSettings;
@@ -1734,24 +2352,41 @@ class _SettingsPanel extends StatelessWidget {
                               onUpdateStep(selectedStep.copyWith(label: value)),
                         ),
                         const SizedBox(height: 10),
-                        DropdownButtonFormField<RequestedState>(
-                          initialValue: selectedStep.requestedState,
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedStep.commandId.isNotEmpty
+                              ? selectedStep.commandId
+                              : commandProfiles.first.id,
                           decoration: const InputDecoration(
-                            labelText: 'Requested State',
+                            labelText: 'Named Command',
                           ),
-                          items: RequestedState.values
+                          items: commandProfiles
                               .map(
-                                (RequestedState state) =>
-                                    DropdownMenuItem<RequestedState>(
-                                      value: state,
-                                      child: Text(state.token),
-                                    ),
+                                (
+                                  PlannerCommandProfile profile,
+                                ) => DropdownMenuItem<String>(
+                                  value: profile.id,
+                                  child: Text(
+                                    '${profile.name} → ${profile.requestedState}',
+                                  ),
+                                ),
                               )
                               .toList(),
-                          onChanged: (RequestedState? state) {
-                            if (state != null) {
+                          onChanged: (String? commandId) {
+                            if (commandId != null) {
+                              final PlannerCommandProfile profile =
+                                  commandProfiles.firstWhere(
+                                    (PlannerCommandProfile entry) =>
+                                        entry.id == commandId,
+                                    orElse: () => commandProfiles.first,
+                                  );
                               onUpdateStep(
-                                selectedStep.copyWith(requestedState: state),
+                                selectedStep.copyWith(
+                                  commandId: profile.id,
+                                  commandName: profile.name,
+                                  requestedState: RequestedState.fromToken(
+                                    profile.requestedState,
+                                  ),
+                                ),
                               );
                             }
                           },
@@ -1768,6 +2403,206 @@ class _SettingsPanel extends StatelessWidget {
                         ),
                       ],
                     ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoneEditor extends StatelessWidget {
+  const _ZoneEditor({required this.zone, required this.onChanged});
+
+  final PlannerZone zone;
+  final ValueChanged<PlannerZone> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        TextFormField(
+          initialValue: zone.label,
+          decoration: const InputDecoration(labelText: 'Zone Label'),
+          onChanged: (String value) => onChanged(
+            zone.copyWith(label: value.isEmpty ? zone.label : value),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: TextFormField(
+                initialValue: zone.xMinMeters.toStringAsFixed(2),
+                decoration: const InputDecoration(labelText: 'Min X'),
+                onChanged: (String value) => onChanged(
+                  zone.copyWith(
+                    xMinMeters: double.tryParse(value) ?? zone.xMinMeters,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextFormField(
+                initialValue: zone.xMaxMeters.toStringAsFixed(2),
+                decoration: const InputDecoration(labelText: 'Max X'),
+                onChanged: (String value) => onChanged(
+                  zone.copyWith(
+                    xMaxMeters: double.tryParse(value) ?? zone.xMaxMeters,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: TextFormField(
+                initialValue: zone.yMinMeters.toStringAsFixed(2),
+                decoration: const InputDecoration(labelText: 'Min Y'),
+                onChanged: (String value) => onChanged(
+                  zone.copyWith(
+                    yMinMeters: double.tryParse(value) ?? zone.yMinMeters,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextFormField(
+                initialValue: zone.yMaxMeters.toStringAsFixed(2),
+                decoration: const InputDecoration(labelText: 'Max Y'),
+                onChanged: (String value) => onChanged(
+                  zone.copyWith(
+                    yMaxMeters: double.tryParse(value) ?? zone.yMaxMeters,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: zone.locked,
+          title: const Text('Locked'),
+          onChanged: (bool value) => onChanged(zone.copyWith(locked: value)),
+        ),
+      ],
+    );
+  }
+}
+
+class _CommandProfileCard extends StatelessWidget {
+  const _CommandProfileCard({
+    required this.profile,
+    required this.onChanged,
+    required this.onDelete,
+  });
+
+  final PlannerCommandProfile profile;
+  final ValueChanged<PlannerCommandProfile> onChanged;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFF151C28),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF273246)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: profile.color,
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextFormField(
+                    initialValue: profile.name,
+                    decoration: const InputDecoration(
+                      labelText: 'Command Name',
+                    ),
+                    onChanged: (String value) => onChanged(
+                      profile.copyWith(
+                        name: value.isEmpty ? profile.name : value,
+                      ),
+                    ),
+                  ),
+                ),
+                if (onDelete != null)
+                  IconButton(
+                    onPressed: onDelete,
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: DropdownButtonFormField<RequestedState>(
+                    initialValue: RequestedState.fromToken(
+                      profile.requestedState,
+                    ),
+                    decoration: const InputDecoration(labelText: 'Robot State'),
+                    items: RequestedState.values
+                        .map(
+                          (RequestedState state) =>
+                              DropdownMenuItem<RequestedState>(
+                                value: state,
+                                child: Text(state.token),
+                              ),
+                        )
+                        .toList(),
+                    onChanged: (RequestedState? state) {
+                      if (state == null) {
+                        return;
+                      }
+                      onChanged(
+                        profile.copyWith(
+                          requestedState: state.token,
+                          colorHex: colorToHex(state.color),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 140,
+                  child: TextFormField(
+                    initialValue: profile.colorHex,
+                    decoration: const InputDecoration(labelText: 'Color Hex'),
+                    onChanged: (String value) => onChanged(
+                      profile.copyWith(
+                        colorHex: value.isEmpty ? profile.colorHex : value,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              initialValue: profile.description,
+              decoration: const InputDecoration(labelText: 'Description'),
+              onChanged: (String value) =>
+                  onChanged(profile.copyWith(description: value)),
             ),
           ],
         ),

@@ -1,0 +1,22 @@
+<svg width="1754" height="805" viewBox="0 0 1754 805" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1754" height="805" rx="28" fill="#0E1420"/>
+  <rect x="22" y="22" width="1710" height="761" rx="22" fill="#132235" stroke="#4C627B" stroke-width="6"/>
+  <rect x="64" y="64" width="1626" height="677" rx="18" fill="#1A3550" stroke="#5D7790" stroke-width="4"/>
+  <path d="M877 64V741" stroke="#E8EEFC" stroke-opacity="0.2" stroke-width="6" stroke-dasharray="24 18"/>
+  <rect x="809" y="64" width="136" height="677" fill="#E8EEFC" fill-opacity="0.04"/>
+  <circle cx="438" cy="402.5" r="104" fill="#E8EEFC" fill-opacity="0.05" stroke="#E8EEFC" stroke-opacity="0.25" stroke-width="6"/>
+  <circle cx="1316" cy="402.5" r="104" fill="#E8EEFC" fill-opacity="0.05" stroke="#E8EEFC" stroke-opacity="0.25" stroke-width="6"/>
+  <rect x="356" y="298" width="164" height="209" rx="16" fill="#E85D75" fill-opacity="0.12" stroke="#FF8CA0" stroke-opacity="0.5" stroke-width="5"/>
+  <rect x="1234" y="298" width="164" height="209" rx="16" fill="#E85D75" fill-opacity="0.12" stroke="#FF8CA0" stroke-opacity="0.5" stroke-width="5"/>
+  <rect x="84" y="124" width="192" height="132" rx="18" fill="#39D98A" fill-opacity="0.08" stroke="#39D98A" stroke-opacity="0.42" stroke-width="5"/>
+  <rect x="84" y="549" width="192" height="132" rx="18" fill="#39D98A" fill-opacity="0.08" stroke="#39D98A" stroke-opacity="0.42" stroke-width="5"/>
+  <rect x="1478" y="124" width="192" height="132" rx="18" fill="#39D98A" fill-opacity="0.08" stroke="#39D98A" stroke-opacity="0.42" stroke-width="5"/>
+  <rect x="1478" y="549" width="192" height="132" rx="18" fill="#39D98A" fill-opacity="0.08" stroke="#39D98A" stroke-opacity="0.42" stroke-width="5"/>
+  <path d="M84 267H276" stroke="#90CDF4" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>
+  <path d="M84 538H276" stroke="#90CDF4" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>
+  <path d="M1478 267H1670" stroke="#90CDF4" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>
+  <path d="M1478 538H1670" stroke="#90CDF4" stroke-opacity="0.35" stroke-width="10" stroke-linecap="round"/>
+  <text x="112" y="112" fill="#E8EEFC" fill-opacity="0.45" font-size="32" font-family="Arial, sans-serif">BLUE REFERENCE</text>
+  <text x="781" y="112" fill="#FFD166" fill-opacity="0.55" font-size="28" font-family="Arial, sans-serif">AUTO LINE</text>
+  <text x="704" y="402" fill="#E8EEFC" fill-opacity="0.22" font-size="34" font-family="Arial, sans-serif">MIDFIELD</text>
+</svg>
