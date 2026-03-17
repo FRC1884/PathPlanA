@@ -2,7 +2,10 @@
 
 PathPlanA is a Flutter planner app for REBUILT autonomous authoring.
 
-It is intended to replace path editing on the operator-board web page. The app authors planner autos locally, then exports a JSON package that the operator board can import and stage to the robot.
+It is intended to replace path editing on the operator-board web page. The app authors planner autos locally, then exports either:
+
+- a JSON package for interchange/debugging
+- a deploy library for `season2026/src/main/deploy/pathplana/autos`
 
 ## Features
 
@@ -13,6 +16,7 @@ It is intended to replace path editing on the operator-board web page. The app a
 - planner tuning and robot envelope settings
 - live route/state preview with per-step requested states
 - JSON import/export using the PathPlanA package contract
+- desktop deploy export that writes `index.json` plus one folder per auto
 
 ## Run
 
@@ -36,7 +40,14 @@ The app ships the contract schema at:
 - `assets/contracts/pathplana_autos.schema.json`
 - `vendor/PathPlanA.json`
 
-The robot/dashboard side in `season2026` expects the exported package to contain an `autos` array with queue-compatible `startPose`, `steps`, and `routeWaypoints`.
+The robot/dashboard side in `season2026` expects either:
+
+- a package JSON with an `autos` array
+- or the deploy library layout:
+  - `pathplana/autos/index.json`
+  - `pathplana/autos/<auto-id>/auto.json`
+
+Use `Export Deploy` on desktop builds to write the deploy library directly.
 
 ## Integration
 

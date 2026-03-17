@@ -1,15 +1,17 @@
 # PathPlanA Integration
 
-`PathPlanA` authors REBUILT autos locally and exports them as a JSON package.
+`PathPlanA` authors REBUILT autos locally and exports them either as a JSON package or as a deploy-backed auto library.
 
 ## Workflow
 
 1. Create autos in the Flutter app.
-2. Export `pathplana_autos.json`.
-3. Import that package into the Season2026 operator board auto tab.
-4. Preview/select the imported auto on the dashboard.
-5. Stage the selected auto to the robot queue.
-6. Execute on the robot through `RebuiltAutoQueue` and `AutoAlignToPoseCommand`.
+2. Use `Export Deploy` to write:
+   - `index.json`
+   - one folder per auto containing `auto.json`
+3. Place that library under `Season2026/src/main/deploy/pathplana/autos/`.
+4. Preview/select the deployed auto on the Season2026 operator board auto tab.
+5. The dashboard publishes only the selected auto id.
+6. The robot loads the selected deploy auto and executes it through `RebuiltAutoQueue` and `AutoAlignToPoseCommand`.
 
 ## Robot execution model
 
@@ -26,6 +28,13 @@ This keeps the planner compatible with the existing auto-align and vision correc
 
 - export schema: `assets/contracts/pathplana_autos.schema.json`
 - vendordep metadata: `vendor/PathPlanA.json`
+
+## Deploy library layout
+
+- `index.json`
+  - manifest with `id`, `name`, `folder`, `relativePath`, and `updatedAt`
+- `<auto-id>/auto.json`
+  - full per-auto spec with `startPose`, `customZones`, and `steps`
 
 ## Vendordep note
 
