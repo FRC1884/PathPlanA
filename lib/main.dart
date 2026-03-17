@@ -82,7 +82,15 @@ class PathPlanAApp extends StatelessWidget {
 
 enum PlannerTool { select, startPose, addStep, addWaypoint }
 
-enum PlannerSection { library, editor, obstacles, commands, settings }
+enum PlannerSection {
+  library,
+  editor,
+  events,
+  constraints,
+  obstacles,
+  commands,
+  settings,
+}
 
 enum RequestedState {
   idling('IDLING', Color(0xFFE8EEFC)),
@@ -208,6 +216,139 @@ List<PlannerCommandProfile> defaultCommandProfiles() {
   ];
 }
 
+PlannerCommandProfile? findCommandProfileById(
+  List<PlannerCommandProfile> profiles,
+  String id,
+) {
+  for (final PlannerCommandProfile profile in profiles) {
+    if (profile.id == id) {
+      return profile;
+    }
+  }
+  return null;
+}
+
+double poseDistanceMeters(PlannerPose a, PlannerPose b) {
+  final double dx = b.xMeters - a.xMeters;
+  final double dy = b.yMeters - a.yMeters;
+  return math.sqrt(dx * dx + dy * dy);
+}
+
+List<PlannerPose> buildAutoRoutePoints(PlannerAuto auto) {
+  final List<PlannerPose> points = <PlannerPose>[auto.startPose];
+  for (final PlannerStep step in auto.steps) {
+    points.addAll(step.routeWaypoints);
+    points.add(step.pose);
+  }
+  return points;
+}
+
+double computeAutoDistanceMeters(PlannerAuto auto) {
+  final List<PlannerPose> points = buildAutoRoutePoints(auto);
+  double total = 0;
+  for (int i = 1; i < points.length; i += 1) {
+    total += poseDistanceMeters(points[i - 1], points[i]);
+  }
+  return total;
+}
+
+double _constraintFactorAtProgress(PlannerAuto auto, double progress) {
+  double factor = 1.0;
+  for (final PlannerConstraintZone zone in auto.constraintZones) {
+    final double start = math.min(zone.startProgress, zone.endProgress);
+    final double end = math.max(zone.startProgress, zone.endProgress);
+    if (progress >= start && progress <= end) {
+      factor = math.min(factor, zone.constraintFactor);
+    }
+  }
+  return factor;
+}
+
+double computeEstimatedTimeSeconds(PlannerAuto auto) {
+  final List<PlannerPose> points = buildAutoRoutePoints(auto);
+  if (points.length < 2) {
+    return 0;
+  }
+  final double totalDistance = computeAutoDistanceMeters(auto);
+  if (totalDistance <= 1e-6) {
+    return auto.steps.fold(
+      0.0,
+      (double sum, PlannerStep step) => sum + step.waitSeconds,
+    );
+  }
+  double traversed = 0;
+  double seconds = 0;
+  for (int i = 1; i < points.length; i += 1) {
+    final double segmentDistance = poseDistanceMeters(points[i - 1], points[i]);
+    if (segmentDistance <= 1e-6) {
+      continue;
+    }
+    final double midpointProgress =
+        ((traversed + (segmentDistance / 2)) / totalDistance).clamp(0.0, 1.0);
+    final double factor = _constraintFactorAtProgress(auto, midpointProgress);
+    final double limitedVelocity = math.min(
+      auto.settings.maxVelocityMps,
+      auto.settings.maxVelocityMps * factor,
+    );
+    final double effectiveVelocity = math.max(
+      limitedVelocity * auto.settings.constraintFactor,
+      0.35,
+    );
+    seconds += segmentDistance / effectiveVelocity;
+    traversed += segmentDistance;
+  }
+  for (final PlannerStep step in auto.steps) {
+    seconds += step.waitSeconds;
+  }
+  return seconds;
+}
+
+PlannerPose sampleAutoPoseAtProgress(PlannerAuto auto, double progress) {
+  final List<PlannerPose> points = buildAutoRoutePoints(auto);
+  if (points.isEmpty) {
+    return const PlannerPose(xMeters: 0, yMeters: 0, headingDeg: 0);
+  }
+  if (points.length == 1) {
+    return points.first;
+  }
+  final double clampedProgress = progress.clamp(0.0, 1.0);
+  final double totalDistance = computeAutoDistanceMeters(auto);
+  if (totalDistance <= 1e-6) {
+    return points.last;
+  }
+  final double targetDistance = totalDistance * clampedProgress;
+  double traversed = 0;
+  for (int i = 1; i < points.length; i += 1) {
+    final PlannerPose start = points[i - 1];
+    final PlannerPose end = points[i];
+    final double segmentDistance = poseDistanceMeters(start, end);
+    if (traversed + segmentDistance >= targetDistance) {
+      final double local = segmentDistance <= 1e-6
+          ? 0
+          : (targetDistance - traversed) / segmentDistance;
+      return PlannerPose(
+        xMeters: start.xMeters + ((end.xMeters - start.xMeters) * local),
+        yMeters: start.yMeters + ((end.yMeters - start.yMeters) * local),
+        headingDeg:
+            start.headingDeg + ((end.headingDeg - start.headingDeg) * local),
+      );
+    }
+    traversed += segmentDistance;
+  }
+  return points.last;
+}
+
+String formatDurationSeconds(double seconds) {
+  final int whole = seconds.floor();
+  final int minutes = whole ~/ 60;
+  final int remaining = whole % 60;
+  final int tenths = ((seconds - whole) * 10).round();
+  if (minutes > 0) {
+    return '$minutes:${remaining.toString().padLeft(2, '0')}.${tenths.toString()}';
+  }
+  return '${whole.toString()}.${tenths.toString()}s';
+}
+
 class PlannerPose {
   const PlannerPose({
     required this.xMeters,
@@ -304,6 +445,201 @@ class PlannerZone {
   }
 }
 
+class PlannerEventMarker {
+  const PlannerEventMarker({
+    required this.id,
+    required this.name,
+    required this.progress,
+    this.commandId = '',
+    this.notes = '',
+  });
+
+  final String id;
+  final String name;
+  final double progress;
+  final String commandId;
+  final String notes;
+
+  PlannerEventMarker copyWith({
+    String? id,
+    String? name,
+    double? progress,
+    String? commandId,
+    String? notes,
+  }) {
+    return PlannerEventMarker(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      progress: progress ?? this.progress,
+      commandId: commandId ?? this.commandId,
+      notes: notes ?? this.notes,
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'id': id,
+    'name': name,
+    'progress': progress,
+    'commandId': commandId,
+    'notes': notes,
+  };
+
+  static PlannerEventMarker fromJson(Map<String, dynamic> json) {
+    return PlannerEventMarker(
+      id: json['id'] as String? ?? 'marker',
+      name: json['name'] as String? ?? 'Marker',
+      progress: ((json['progress'] as num?)?.toDouble() ?? 0).clamp(0.0, 1.0),
+      commandId: json['commandId'] as String? ?? '',
+      notes: json['notes'] as String? ?? '',
+    );
+  }
+}
+
+class PlannerEventZone {
+  const PlannerEventZone({
+    required this.id,
+    required this.name,
+    required this.startProgress,
+    required this.endProgress,
+    this.enterCommandId = '',
+    this.exitCommandId = '',
+    this.activeCommandId = '',
+    this.colorHex = '#FF8C69',
+  });
+
+  final String id;
+  final String name;
+  final double startProgress;
+  final double endProgress;
+  final String enterCommandId;
+  final String exitCommandId;
+  final String activeCommandId;
+  final String colorHex;
+
+  Color get color => parseHexColor(colorHex) ?? const Color(0xFFFF8C69);
+
+  PlannerEventZone copyWith({
+    String? id,
+    String? name,
+    double? startProgress,
+    double? endProgress,
+    String? enterCommandId,
+    String? exitCommandId,
+    String? activeCommandId,
+    String? colorHex,
+  }) {
+    return PlannerEventZone(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      startProgress: startProgress ?? this.startProgress,
+      endProgress: endProgress ?? this.endProgress,
+      enterCommandId: enterCommandId ?? this.enterCommandId,
+      exitCommandId: exitCommandId ?? this.exitCommandId,
+      activeCommandId: activeCommandId ?? this.activeCommandId,
+      colorHex: colorHex ?? this.colorHex,
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'id': id,
+    'name': name,
+    'startProgress': startProgress,
+    'endProgress': endProgress,
+    'enterCommandId': enterCommandId,
+    'exitCommandId': exitCommandId,
+    'activeCommandId': activeCommandId,
+    'colorHex': colorHex,
+  };
+
+  static PlannerEventZone fromJson(Map<String, dynamic> json) {
+    return PlannerEventZone(
+      id: json['id'] as String? ?? 'event-zone',
+      name: json['name'] as String? ?? 'Zone',
+      startProgress: ((json['startProgress'] as num?)?.toDouble() ?? 0).clamp(
+        0.0,
+        1.0,
+      ),
+      endProgress: ((json['endProgress'] as num?)?.toDouble() ?? 1).clamp(
+        0.0,
+        1.0,
+      ),
+      enterCommandId: json['enterCommandId'] as String? ?? '',
+      exitCommandId: json['exitCommandId'] as String? ?? '',
+      activeCommandId: json['activeCommandId'] as String? ?? '',
+      colorHex: json['colorHex'] as String? ?? '#FF8C69',
+    );
+  }
+}
+
+class PlannerConstraintZone {
+  const PlannerConstraintZone({
+    required this.id,
+    required this.name,
+    required this.startProgress,
+    required this.endProgress,
+    this.maxVelocityMps = 2.0,
+    this.maxAccelerationMpsSq = 2.0,
+    this.constraintFactor = 0.65,
+  });
+
+  final String id;
+  final String name;
+  final double startProgress;
+  final double endProgress;
+  final double maxVelocityMps;
+  final double maxAccelerationMpsSq;
+  final double constraintFactor;
+
+  PlannerConstraintZone copyWith({
+    String? id,
+    String? name,
+    double? startProgress,
+    double? endProgress,
+    double? maxVelocityMps,
+    double? maxAccelerationMpsSq,
+    double? constraintFactor,
+  }) {
+    return PlannerConstraintZone(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      startProgress: startProgress ?? this.startProgress,
+      endProgress: endProgress ?? this.endProgress,
+      maxVelocityMps: maxVelocityMps ?? this.maxVelocityMps,
+      maxAccelerationMpsSq: maxAccelerationMpsSq ?? this.maxAccelerationMpsSq,
+      constraintFactor: constraintFactor ?? this.constraintFactor,
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'id': id,
+    'name': name,
+    'startProgress': startProgress,
+    'endProgress': endProgress,
+    'maxVelocityMps': maxVelocityMps,
+    'maxAccelerationMpsSq': maxAccelerationMpsSq,
+    'constraintFactor': constraintFactor,
+  };
+
+  static PlannerConstraintZone fromJson(Map<String, dynamic> json) {
+    return PlannerConstraintZone(
+      id: json['id'] as String? ?? 'constraint-zone',
+      name: json['name'] as String? ?? 'Constraint Zone',
+      startProgress: ((json['startProgress'] as num?)?.toDouble() ?? 0).clamp(
+        0.0,
+        1.0,
+      ),
+      endProgress: ((json['endProgress'] as num?)?.toDouble() ?? 1).clamp(
+        0.0,
+        1.0,
+      ),
+      maxVelocityMps: (json['maxVelocityMps'] as num?)?.toDouble() ?? 2.0,
+      maxAccelerationMpsSq:
+          (json['maxAccelerationMpsSq'] as num?)?.toDouble() ?? 2.0,
+      constraintFactor: (json['constraintFactor'] as num?)?.toDouble() ?? 0.65,
+    );
+  }
+}
+
 class PlannerSettings {
   const PlannerSettings({
     this.visionCorrectionEnabled = true,
@@ -318,6 +654,8 @@ class PlannerSettings {
     this.allowReverse = false,
     this.holdHeading = true,
     this.previewSmoothing = 0.72,
+    this.maxVelocityMps = 4.6,
+    this.maxAccelerationMpsSq = 3.5,
   });
 
   final bool visionCorrectionEnabled;
@@ -332,6 +670,8 @@ class PlannerSettings {
   final bool allowReverse;
   final bool holdHeading;
   final double previewSmoothing;
+  final double maxVelocityMps;
+  final double maxAccelerationMpsSq;
 
   PlannerSettings copyWith({
     bool? visionCorrectionEnabled,
@@ -346,6 +686,8 @@ class PlannerSettings {
     bool? allowReverse,
     bool? holdHeading,
     double? previewSmoothing,
+    double? maxVelocityMps,
+    double? maxAccelerationMpsSq,
   }) {
     return PlannerSettings(
       visionCorrectionEnabled:
@@ -361,6 +703,8 @@ class PlannerSettings {
       allowReverse: allowReverse ?? this.allowReverse,
       holdHeading: holdHeading ?? this.holdHeading,
       previewSmoothing: previewSmoothing ?? this.previewSmoothing,
+      maxVelocityMps: maxVelocityMps ?? this.maxVelocityMps,
+      maxAccelerationMpsSq: maxAccelerationMpsSq ?? this.maxAccelerationMpsSq,
     );
   }
 
@@ -382,6 +726,8 @@ class PlannerSettings {
       'allowReverse': allowReverse,
       'holdHeading': holdHeading,
       'previewSmoothing': previewSmoothing,
+      'maxVelocityMps': maxVelocityMps,
+      'maxAccelerationMpsSq': maxAccelerationMpsSq,
     },
   };
 
@@ -406,6 +752,9 @@ class PlannerSettings {
       holdHeading: planner['holdHeading'] as bool? ?? true,
       previewSmoothing:
           (planner['previewSmoothing'] as num?)?.toDouble() ?? 0.72,
+      maxVelocityMps: (planner['maxVelocityMps'] as num?)?.toDouble() ?? 4.6,
+      maxAccelerationMpsSq:
+          (planner['maxAccelerationMpsSq'] as num?)?.toDouble() ?? 3.5,
     );
   }
 }
@@ -421,6 +770,7 @@ class PlannerStep {
     this.commandId = '',
     this.commandName = '',
     this.routeWaypoints = const <PlannerPose>[],
+    this.waitSeconds = 0,
   });
 
   final String id;
@@ -432,6 +782,7 @@ class PlannerStep {
   final String commandId;
   final String commandName;
   final List<PlannerPose> routeWaypoints;
+  final double waitSeconds;
 
   PlannerStep copyWith({
     String? id,
@@ -443,6 +794,7 @@ class PlannerStep {
     String? commandId,
     String? commandName,
     List<PlannerPose>? routeWaypoints,
+    double? waitSeconds,
   }) {
     return PlannerStep(
       id: id ?? this.id,
@@ -454,6 +806,7 @@ class PlannerStep {
       commandId: commandId ?? this.commandId,
       commandName: commandName ?? this.commandName,
       routeWaypoints: routeWaypoints ?? this.routeWaypoints,
+      waitSeconds: waitSeconds ?? this.waitSeconds,
     );
   }
 
@@ -471,6 +824,7 @@ class PlannerStep {
     'toleranceMeters': settings.toleranceMeters,
     'timeoutSeconds': settings.timeoutSeconds,
     'endVelocityMps': settings.endVelocityMps,
+    'waitSeconds': waitSeconds,
     'routeWaypoints': routeWaypoints.map((pose) => pose.toJson()).toList(),
   };
 
@@ -490,6 +844,7 @@ class PlannerStep {
       spotId: json['spotId'] as String? ?? '',
       commandId: json['commandId'] as String? ?? '',
       commandName: json['commandName'] as String? ?? '',
+      waitSeconds: (json['waitSeconds'] as num?)?.toDouble() ?? 0,
       routeWaypoints: (json['routeWaypoints'] as List<dynamic>? ?? const [])
           .map(
             (dynamic pose) =>
@@ -509,6 +864,9 @@ class PlannerAuto {
     required this.steps,
     required this.settings,
     this.customZones = const <PlannerZone>[],
+    this.eventMarkers = const <PlannerEventMarker>[],
+    this.eventZones = const <PlannerEventZone>[],
+    this.constraintZones = const <PlannerConstraintZone>[],
   });
 
   final String id;
@@ -518,6 +876,9 @@ class PlannerAuto {
   final List<PlannerStep> steps;
   final PlannerSettings settings;
   final List<PlannerZone> customZones;
+  final List<PlannerEventMarker> eventMarkers;
+  final List<PlannerEventZone> eventZones;
+  final List<PlannerConstraintZone> constraintZones;
 
   PlannerAuto copyWith({
     String? id,
@@ -527,6 +888,9 @@ class PlannerAuto {
     List<PlannerStep>? steps,
     PlannerSettings? settings,
     List<PlannerZone>? customZones,
+    List<PlannerEventMarker>? eventMarkers,
+    List<PlannerEventZone>? eventZones,
+    List<PlannerConstraintZone>? constraintZones,
   }) {
     return PlannerAuto(
       id: id ?? this.id,
@@ -536,6 +900,9 @@ class PlannerAuto {
       steps: steps ?? this.steps,
       settings: settings ?? this.settings,
       customZones: customZones ?? this.customZones,
+      eventMarkers: eventMarkers ?? this.eventMarkers,
+      eventZones: eventZones ?? this.eventZones,
+      constraintZones: constraintZones ?? this.constraintZones,
     );
   }
 
@@ -545,6 +912,9 @@ class PlannerAuto {
     'updatedAt': updatedAt.millisecondsSinceEpoch,
     'startPose': startPose.toJson(),
     'customZones': customZones.map((zone) => zone.toJson()).toList(),
+    'eventMarkers': eventMarkers.map((event) => event.toJson()).toList(),
+    'eventZones': eventZones.map((event) => event.toJson()).toList(),
+    'constraintZones': constraintZones.map((zone) => zone.toJson()).toList(),
     'plannerSettings': settings.toJson(),
     'steps': steps.map((step) => step.toJson(settings)).toList(),
   };
@@ -567,6 +937,24 @@ class PlannerAuto {
           .map(
             (dynamic zone) =>
                 PlannerZone.fromJson(zone as Map<String, dynamic>),
+          )
+          .toList(),
+      eventMarkers: (json['eventMarkers'] as List<dynamic>? ?? const [])
+          .map(
+            (dynamic event) =>
+                PlannerEventMarker.fromJson(event as Map<String, dynamic>),
+          )
+          .toList(),
+      eventZones: (json['eventZones'] as List<dynamic>? ?? const [])
+          .map(
+            (dynamic event) =>
+                PlannerEventZone.fromJson(event as Map<String, dynamic>),
+          )
+          .toList(),
+      constraintZones: (json['constraintZones'] as List<dynamic>? ?? const [])
+          .map(
+            (dynamic zone) =>
+                PlannerConstraintZone.fromJson(zone as Map<String, dynamic>),
           )
           .toList(),
       steps: (json['steps'] as List<dynamic>? ?? const [])
@@ -600,6 +988,42 @@ class PlannerAuto {
           locked: true,
         ),
       ],
+      eventMarkers: const <PlannerEventMarker>[
+        PlannerEventMarker(
+          id: 'marker-1',
+          name: 'Spin Intake',
+          progress: 0.18,
+          commandId: 'cmd-intake',
+        ),
+        PlannerEventMarker(
+          id: 'marker-2',
+          name: 'Prep Shot',
+          progress: 0.78,
+          commandId: 'cmd-score',
+        ),
+      ],
+      eventZones: const <PlannerEventZone>[
+        PlannerEventZone(
+          id: 'zone-1',
+          name: 'Collect Window',
+          startProgress: 0.08,
+          endProgress: 0.34,
+          enterCommandId: 'cmd-intake',
+          activeCommandId: 'cmd-intake',
+          colorHex: '#39D98A',
+        ),
+      ],
+      constraintZones: const <PlannerConstraintZone>[
+        PlannerConstraintZone(
+          id: 'constraint-1',
+          name: 'Approach Slowdown',
+          startProgress: 0.62,
+          endProgress: 0.96,
+          maxVelocityMps: 2.3,
+          maxAccelerationMpsSq: 1.9,
+          constraintFactor: 0.55,
+        ),
+      ],
       steps: const <PlannerStep>[
         PlannerStep(
           id: 'step-1',
@@ -610,6 +1034,8 @@ class PlannerAuto {
           routeWaypoints: <PlannerPose>[
             PlannerPose(xMeters: 1.44, yMeters: 5.38, headingDeg: 180),
           ],
+          commandId: 'cmd-intake',
+          commandName: 'Rear Intake',
         ),
         PlannerStep(
           id: 'step-2',
@@ -621,6 +1047,9 @@ class PlannerAuto {
             PlannerPose(xMeters: 2.7, yMeters: 5.66, headingDeg: 0),
             PlannerPose(xMeters: 3.88, yMeters: 5.66, headingDeg: -60),
           ],
+          commandId: 'cmd-score',
+          commandName: 'Shoot Cycle',
+          waitSeconds: 0.25,
         ),
       ],
     );
@@ -747,15 +1176,22 @@ class PlannerHomePage extends StatefulWidget {
   State<PlannerHomePage> createState() => _PlannerHomePageState();
 }
 
-class _PlannerHomePageState extends State<PlannerHomePage> {
+class _PlannerHomePageState extends State<PlannerHomePage>
+    with SingleTickerProviderStateMixin {
   PlannerPackage _package = PlannerPackage.sample();
   int _selectedAutoIndex = 0;
   int? _selectedStepIndex;
   int? _selectedZoneIndex;
+  int? _selectedMarkerIndex;
+  int? _selectedEventZoneIndex;
+  int? _selectedConstraintZoneIndex;
   PlannerTool _tool = PlannerTool.select;
   PlannerSection _selectedSection = PlannerSection.library;
   String _draftCommandId = 'cmd-intake';
   double _draftHeadingDeg = 180;
+  late final AnimationController _previewController;
+  bool _previewPlaying = false;
+  double _previewProgress = 0;
   String _statusMessage = 'Ready to author autos locally.';
   String _schemaSummary = 'Loading schema...';
 
@@ -763,11 +1199,36 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
   List<PlannerCommandProfile> get _commandProfiles => _package.commandProfiles;
   PlannerCommandProfile get _draftCommand =>
       _resolveCommandProfileById(_draftCommandId) ?? _commandProfiles.first;
+  double get _estimatedTimeSeconds =>
+      computeEstimatedTimeSeconds(_selectedAuto);
 
   @override
   void initState() {
     super.initState();
+    _previewController = AnimationController(vsync: this)
+      ..addListener(() {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _previewProgress = _previewController.value;
+        });
+      })
+      ..addStatusListener((AnimationStatus status) {
+        if (status == AnimationStatus.completed && mounted) {
+          setState(() {
+            _previewPlaying = false;
+          });
+        }
+      });
     _loadSchemaSummary();
+    _configurePreviewAnimation();
+  }
+
+  @override
+  void dispose() {
+    _previewController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadSchemaSummary() async {
@@ -788,6 +1249,42 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       }
     }
     return null;
+  }
+
+  void _configurePreviewAnimation() {
+    final int milliseconds = math.max(
+      400,
+      (_estimatedTimeSeconds * 1000).round(),
+    );
+    _previewController.duration = Duration(milliseconds: milliseconds);
+  }
+
+  void _togglePreviewPlayback() {
+    _configurePreviewAnimation();
+    if (_previewPlaying) {
+      _previewController.stop();
+      setState(() {
+        _previewPlaying = false;
+      });
+      return;
+    }
+    if (_previewProgress >= 0.999) {
+      _previewController.value = 0;
+    }
+    _previewController.forward(from: _previewController.value);
+    setState(() {
+      _previewPlaying = true;
+    });
+  }
+
+  void _setPreviewProgress(double value) {
+    final double clamped = value.clamp(0.0, 1.0);
+    _previewController.stop();
+    _previewController.value = clamped;
+    setState(() {
+      _previewPlaying = false;
+      _previewProgress = clamped;
+    });
   }
 
   Future<void> _importPackage() async {
@@ -814,10 +1311,22 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       _selectedZoneIndex = imported.autos.first.customZones.isNotEmpty
           ? 0
           : null;
+      _selectedMarkerIndex = imported.autos.first.eventMarkers.isNotEmpty
+          ? 0
+          : null;
+      _selectedEventZoneIndex = imported.autos.first.eventZones.isNotEmpty
+          ? 0
+          : null;
+      _selectedConstraintZoneIndex =
+          imported.autos.first.constraintZones.isNotEmpty ? 0 : null;
       _draftCommandId = imported.commandProfiles.first.id;
+      _previewProgress = 0;
+      _previewPlaying = false;
       _statusMessage =
           'Imported ${imported.autos.length} auto${imported.autos.length == 1 ? '' : 's'} from ${file.name}.';
     });
+    _previewController.value = 0;
+    _configurePreviewAnimation();
   }
 
   Future<void> _exportPackage() async {
@@ -865,9 +1374,16 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       _selectedAutoIndex = _package.autos.length - 1;
       _selectedStepIndex = null;
       _selectedZoneIndex = auto.customZones.isNotEmpty ? 0 : null;
+      _selectedMarkerIndex = auto.eventMarkers.isNotEmpty ? 0 : null;
+      _selectedEventZoneIndex = auto.eventZones.isNotEmpty ? 0 : null;
+      _selectedConstraintZoneIndex = auto.constraintZones.isNotEmpty ? 0 : null;
       _selectedSection = PlannerSection.editor;
+      _previewProgress = 0;
+      _previewPlaying = false;
       _statusMessage = 'Created ${auto.name}.';
     });
+    _previewController.value = 0;
+    _configurePreviewAnimation();
   }
 
   void _deleteSelectedAuto() {
@@ -888,8 +1404,20 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       _selectedZoneIndex = autos[_selectedAutoIndex].customZones.isEmpty
           ? null
           : 0;
+      _selectedMarkerIndex = autos[_selectedAutoIndex].eventMarkers.isEmpty
+          ? null
+          : 0;
+      _selectedEventZoneIndex = autos[_selectedAutoIndex].eventZones.isEmpty
+          ? null
+          : 0;
+      _selectedConstraintZoneIndex =
+          autos[_selectedAutoIndex].constraintZones.isEmpty ? null : 0;
+      _previewProgress = 0;
+      _previewPlaying = false;
       _statusMessage = 'Deleted selected auto.';
     });
+    _previewController.value = 0;
+    _configurePreviewAnimation();
   }
 
   void _selectAuto(int index) {
@@ -897,9 +1425,18 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
       _selectedAutoIndex = index;
       _selectedStepIndex = _selectedAuto.steps.isEmpty ? null : 0;
       _selectedZoneIndex = _selectedAuto.customZones.isEmpty ? null : 0;
+      _selectedMarkerIndex = _selectedAuto.eventMarkers.isEmpty ? null : 0;
+      _selectedEventZoneIndex = _selectedAuto.eventZones.isEmpty ? null : 0;
+      _selectedConstraintZoneIndex = _selectedAuto.constraintZones.isEmpty
+          ? null
+          : 0;
       _selectedSection = PlannerSection.editor;
+      _previewProgress = 0;
+      _previewPlaying = false;
       _statusMessage = 'Previewing ${_selectedAuto.name}.';
     });
+    _previewController.value = 0;
+    _configurePreviewAnimation();
   }
 
   void _updateSelectedAuto(PlannerAuto nextAuto) {
@@ -913,6 +1450,7 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
         commandProfiles: _package.commandProfiles,
       );
     });
+    _configurePreviewAnimation();
   }
 
   void _handleCanvasTap(Offset fieldPose) {
@@ -1044,6 +1582,119 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
     });
   }
 
+  void _addEventMarker() {
+    final List<PlannerEventMarker> markers = <PlannerEventMarker>[
+      ..._selectedAuto.eventMarkers,
+      PlannerEventMarker(
+        id: 'marker-${DateTime.now().microsecondsSinceEpoch}',
+        name: 'Marker ${_selectedAuto.eventMarkers.length + 1}',
+        progress: 0.5,
+        commandId: _draftCommand.id,
+      ),
+    ];
+    _updateSelectedAuto(_selectedAuto.copyWith(eventMarkers: markers));
+    setState(() {
+      _selectedMarkerIndex = markers.length - 1;
+      _selectedSection = PlannerSection.events;
+    });
+  }
+
+  void _updateEventMarker(int index, PlannerEventMarker marker) {
+    final List<PlannerEventMarker> markers = <PlannerEventMarker>[
+      ..._selectedAuto.eventMarkers,
+    ];
+    markers[index] = marker;
+    _updateSelectedAuto(_selectedAuto.copyWith(eventMarkers: markers));
+  }
+
+  void _deleteEventMarker(int index) {
+    final List<PlannerEventMarker> markers = <PlannerEventMarker>[
+      ..._selectedAuto.eventMarkers,
+    ]..removeAt(index);
+    _updateSelectedAuto(_selectedAuto.copyWith(eventMarkers: markers));
+    setState(() {
+      _selectedMarkerIndex = markers.isEmpty
+          ? null
+          : math.min(index, markers.length - 1);
+    });
+  }
+
+  void _addEventZone() {
+    final List<PlannerEventZone> zones = <PlannerEventZone>[
+      ..._selectedAuto.eventZones,
+      PlannerEventZone(
+        id: 'event-zone-${DateTime.now().microsecondsSinceEpoch}',
+        name: 'Event Zone ${_selectedAuto.eventZones.length + 1}',
+        startProgress: 0.2,
+        endProgress: 0.45,
+        enterCommandId: _draftCommand.id,
+        activeCommandId: _draftCommand.id,
+      ),
+    ];
+    _updateSelectedAuto(_selectedAuto.copyWith(eventZones: zones));
+    setState(() {
+      _selectedEventZoneIndex = zones.length - 1;
+      _selectedSection = PlannerSection.events;
+    });
+  }
+
+  void _updateEventZone(int index, PlannerEventZone zone) {
+    final List<PlannerEventZone> zones = <PlannerEventZone>[
+      ..._selectedAuto.eventZones,
+    ];
+    zones[index] = zone;
+    _updateSelectedAuto(_selectedAuto.copyWith(eventZones: zones));
+  }
+
+  void _deleteEventZone(int index) {
+    final List<PlannerEventZone> zones = <PlannerEventZone>[
+      ..._selectedAuto.eventZones,
+    ]..removeAt(index);
+    _updateSelectedAuto(_selectedAuto.copyWith(eventZones: zones));
+    setState(() {
+      _selectedEventZoneIndex = zones.isEmpty
+          ? null
+          : math.min(index, zones.length - 1);
+    });
+  }
+
+  void _addConstraintZone() {
+    final List<PlannerConstraintZone> zones = <PlannerConstraintZone>[
+      ..._selectedAuto.constraintZones,
+      PlannerConstraintZone(
+        id: 'constraint-${DateTime.now().microsecondsSinceEpoch}',
+        name: 'Constraint ${_selectedAuto.constraintZones.length + 1}',
+        startProgress: 0.55,
+        endProgress: 0.85,
+      ),
+    ];
+    _updateSelectedAuto(_selectedAuto.copyWith(constraintZones: zones));
+    setState(() {
+      _selectedConstraintZoneIndex = zones.length - 1;
+      _selectedSection = PlannerSection.constraints;
+    });
+  }
+
+  void _updateConstraintZone(int index, PlannerConstraintZone zone) {
+    final List<PlannerConstraintZone> zones = <PlannerConstraintZone>[
+      ..._selectedAuto.constraintZones,
+    ];
+    zones[index] = zone;
+    _updateSelectedAuto(_selectedAuto.copyWith(constraintZones: zones));
+  }
+
+  void _deleteConstraintZone(int index) {
+    final List<PlannerConstraintZone> zones = <PlannerConstraintZone>[
+      ..._selectedAuto.constraintZones,
+    ]..removeAt(index);
+    _updateSelectedAuto(_selectedAuto.copyWith(constraintZones: zones));
+    setState(() {
+      _selectedConstraintZoneIndex = zones.isEmpty
+          ? null
+          : math.min(index, zones.length - 1);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1119,6 +1770,16 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
                   label: Text('Editor'),
                 ),
                 NavigationRailDestination(
+                  icon: Icon(Icons.bolt_outlined),
+                  selectedIcon: Icon(Icons.bolt),
+                  label: Text('Events'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.speed_outlined),
+                  selectedIcon: Icon(Icons.speed),
+                  label: Text('Constraints'),
+                ),
+                NavigationRailDestination(
                   icon: Icon(Icons.crop_square_outlined),
                   selectedIcon: Icon(Icons.crop_square),
                   label: Text('Obstacles'),
@@ -1157,12 +1818,17 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
                     tool: _tool,
                     draftCommandId: _draftCommandId,
                     draftHeadingDeg: _draftHeadingDeg,
+                    estimatedTimeSeconds: _estimatedTimeSeconds,
+                    playbackProgress: _previewProgress,
+                    previewPlaying: _previewPlaying,
                     onToolChanged: (PlannerTool tool) =>
                         setState(() => _tool = tool),
                     onDraftCommandChanged: (String value) =>
                         setState(() => _draftCommandId = value),
                     onHeadingChanged: (double value) =>
                         setState(() => _draftHeadingDeg = value),
+                    onTogglePlayback: _togglePreviewPlayback,
+                    onPlaybackScrub: _setPreviewProgress,
                     onTap: _handleCanvasTap,
                     onSelectStep: (int index) =>
                         setState(() => _selectedStepIndex = index),
@@ -1177,6 +1843,31 @@ class _PlannerHomePageState extends State<PlannerHomePage> {
                             : math.min(index, steps.length - 1);
                       });
                     },
+                  ),
+                  _EventsSection(
+                    auto: _selectedAuto,
+                    commandProfiles: _commandProfiles,
+                    selectedMarkerIndex: _selectedMarkerIndex,
+                    selectedEventZoneIndex: _selectedEventZoneIndex,
+                    onSelectMarker: (int index) =>
+                        setState(() => _selectedMarkerIndex = index),
+                    onSelectEventZone: (int index) =>
+                        setState(() => _selectedEventZoneIndex = index),
+                    onAddMarker: _addEventMarker,
+                    onAddEventZone: _addEventZone,
+                    onUpdateMarker: _updateEventMarker,
+                    onDeleteMarker: _deleteEventMarker,
+                    onUpdateEventZone: _updateEventZone,
+                    onDeleteEventZone: _deleteEventZone,
+                  ),
+                  _ConstraintSection(
+                    auto: _selectedAuto,
+                    selectedConstraintZoneIndex: _selectedConstraintZoneIndex,
+                    onSelectConstraintZone: (int index) =>
+                        setState(() => _selectedConstraintZoneIndex = index),
+                    onAddConstraintZone: _addConstraintZone,
+                    onUpdateConstraintZone: _updateConstraintZone,
+                    onDeleteConstraintZone: _deleteConstraintZone,
                   ),
                   _ObstacleSection(
                     auto: _selectedAuto,
@@ -1342,9 +2033,14 @@ class _EditorSection extends StatelessWidget {
     required this.tool,
     required this.draftCommandId,
     required this.draftHeadingDeg,
+    required this.estimatedTimeSeconds,
+    required this.playbackProgress,
+    required this.previewPlaying,
     required this.onToolChanged,
     required this.onDraftCommandChanged,
     required this.onHeadingChanged,
+    required this.onTogglePlayback,
+    required this.onPlaybackScrub,
     required this.onTap,
     required this.onSelectStep,
     required this.onDeleteStep,
@@ -1356,9 +2052,14 @@ class _EditorSection extends StatelessWidget {
   final PlannerTool tool;
   final String draftCommandId;
   final double draftHeadingDeg;
+  final double estimatedTimeSeconds;
+  final double playbackProgress;
+  final bool previewPlaying;
   final ValueChanged<PlannerTool> onToolChanged;
   final ValueChanged<String> onDraftCommandChanged;
   final ValueChanged<double> onHeadingChanged;
+  final VoidCallback onTogglePlayback;
+  final ValueChanged<double> onPlaybackScrub;
   final ValueChanged<Offset> onTap;
   final ValueChanged<int> onSelectStep;
   final ValueChanged<int> onDeleteStep;
@@ -1375,6 +2076,63 @@ class _EditorSection extends StatelessWidget {
           onToolChanged: onToolChanged,
           onDraftCommandChanged: onDraftCommandChanged,
           onHeadingChanged: onHeadingChanged,
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    _MetricChip(
+                      label: 'ETA',
+                      value: formatDurationSeconds(estimatedTimeSeconds),
+                    ),
+                    const SizedBox(width: 10),
+                    _MetricChip(
+                      label: 'Distance',
+                      value:
+                          '${computeAutoDistanceMeters(auto).toStringAsFixed(2)} m',
+                    ),
+                    const SizedBox(width: 10),
+                    _MetricChip(
+                      label: 'Commands',
+                      value:
+                          '${auto.eventMarkers.length + auto.eventZones.length}',
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: onTogglePlayback,
+                      icon: Icon(
+                        previewPlaying ? Icons.pause : Icons.play_arrow,
+                      ),
+                      label: Text(previewPlaying ? 'Pause' : 'Animate'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: <Widget>[
+                    const Text(
+                      'Path Preview',
+                      style: TextStyle(color: Color(0xFF94A0B8)),
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: playbackProgress.clamp(0.0, 1.0),
+                        onChanged: onPlaybackScrub,
+                      ),
+                    ),
+                    Text(
+                      '${(playbackProgress * 100).round()}%',
+                      style: const TextStyle(color: Color(0xFF94A0B8)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
         const SizedBox(height: 12),
         Expanded(
@@ -1410,6 +2168,7 @@ class _EditorSection extends StatelessWidget {
                           child: _FieldEditor(
                             auto: auto,
                             selectedStepIndex: selectedStepIndex,
+                            playbackProgress: playbackProgress,
                             onTap: onTap,
                           ),
                         ),
@@ -1429,6 +2188,393 @@ class _EditorSection extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MetricChip extends StatelessWidget {
+  const _MetricChip({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151C28),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF273246)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF94A0B8),
+              fontSize: 11,
+              letterSpacing: 0.4,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
+        ],
+      ),
+    );
+  }
+}
+
+class _EventsSection extends StatelessWidget {
+  const _EventsSection({
+    required this.auto,
+    required this.commandProfiles,
+    required this.selectedMarkerIndex,
+    required this.selectedEventZoneIndex,
+    required this.onSelectMarker,
+    required this.onSelectEventZone,
+    required this.onAddMarker,
+    required this.onAddEventZone,
+    required this.onUpdateMarker,
+    required this.onDeleteMarker,
+    required this.onUpdateEventZone,
+    required this.onDeleteEventZone,
+  });
+
+  final PlannerAuto auto;
+  final List<PlannerCommandProfile> commandProfiles;
+  final int? selectedMarkerIndex;
+  final int? selectedEventZoneIndex;
+  final ValueChanged<int> onSelectMarker;
+  final ValueChanged<int> onSelectEventZone;
+  final VoidCallback onAddMarker;
+  final VoidCallback onAddEventZone;
+  final void Function(int index, PlannerEventMarker marker) onUpdateMarker;
+  final ValueChanged<int> onDeleteMarker;
+  final void Function(int index, PlannerEventZone zone) onUpdateEventZone;
+  final ValueChanged<int> onDeleteEventZone;
+
+  @override
+  Widget build(BuildContext context) {
+    final PlannerEventMarker? selectedMarker = selectedMarkerIndex == null
+        ? null
+        : auto.eventMarkers[selectedMarkerIndex!];
+    final PlannerEventZone? selectedZone = selectedEventZoneIndex == null
+        ? null
+        : auto.eventZones[selectedEventZoneIndex!];
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      const Expanded(
+                        child: Text(
+                          'Event Markers',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: onAddMarker,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add Marker'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: auto.eventMarkers.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (BuildContext context, int index) {
+                        final PlannerEventMarker marker =
+                            auto.eventMarkers[index];
+                        final PlannerCommandProfile? profile =
+                            findCommandProfileById(
+                              commandProfiles,
+                              marker.commandId,
+                            );
+                        return Material(
+                          color: index == selectedMarkerIndex
+                              ? const Color(0x26FFD166)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(14),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () => onSelectMarker(index),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: <Widget>[
+                                  const Icon(Icons.flag_circle_outlined),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        Text(marker.name),
+                                        Text(
+                                          '${(marker.progress * 100).round()}% • ${profile?.name ?? "No command"}',
+                                          style: const TextStyle(
+                                            color: Color(0xFF94A0B8),
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () => onDeleteMarker(index),
+                                    icon: const Icon(Icons.delete_outline),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (selectedMarker != null)
+                    _EventMarkerEditor(
+                      marker: selectedMarker,
+                      commandProfiles: commandProfiles,
+                      onChanged: (PlannerEventMarker marker) =>
+                          onUpdateMarker(selectedMarkerIndex!, marker),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      const Expanded(
+                        child: Text(
+                          'Event Zones',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: onAddEventZone,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add Zone'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: auto.eventZones.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (BuildContext context, int index) {
+                        final PlannerEventZone zone = auto.eventZones[index];
+                        return Material(
+                          color: index == selectedEventZoneIndex
+                              ? zone.color.withValues(alpha: 0.16)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(14),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () => onSelectEventZone(index),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: <Widget>[
+                                  Icon(Icons.timeline, color: zone.color),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        Text(zone.name),
+                                        Text(
+                                          '${(zone.startProgress * 100).round()}% → ${(zone.endProgress * 100).round()}%',
+                                          style: const TextStyle(
+                                            color: Color(0xFF94A0B8),
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () => onDeleteEventZone(index),
+                                    icon: const Icon(Icons.delete_outline),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (selectedZone != null)
+                    _EventZoneEditor(
+                      zone: selectedZone,
+                      commandProfiles: commandProfiles,
+                      onChanged: (PlannerEventZone zone) =>
+                          onUpdateEventZone(selectedEventZoneIndex!, zone),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ConstraintSection extends StatelessWidget {
+  const _ConstraintSection({
+    required this.auto,
+    required this.selectedConstraintZoneIndex,
+    required this.onSelectConstraintZone,
+    required this.onAddConstraintZone,
+    required this.onUpdateConstraintZone,
+    required this.onDeleteConstraintZone,
+  });
+
+  final PlannerAuto auto;
+  final int? selectedConstraintZoneIndex;
+  final ValueChanged<int> onSelectConstraintZone;
+  final VoidCallback onAddConstraintZone;
+  final void Function(int index, PlannerConstraintZone zone)
+  onUpdateConstraintZone;
+  final ValueChanged<int> onDeleteConstraintZone;
+
+  @override
+  Widget build(BuildContext context) {
+    final PlannerConstraintZone? selected = selectedConstraintZoneIndex == null
+        ? null
+        : auto.constraintZones[selectedConstraintZoneIndex!];
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      const Expanded(
+                        child: Text(
+                          'Constraint Zones',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: onAddConstraintZone,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: auto.constraintZones.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (BuildContext context, int index) {
+                        final PlannerConstraintZone zone =
+                            auto.constraintZones[index];
+                        return Material(
+                          color: index == selectedConstraintZoneIndex
+                              ? const Color(0x2659B6F8)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(14),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () => onSelectConstraintZone(index),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: <Widget>[
+                                  const Icon(
+                                    Icons.speed,
+                                    color: Color(0xFF90CDF4),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        Text(zone.name),
+                                        Text(
+                                          '${zone.maxVelocityMps.toStringAsFixed(1)} m/s • ${(zone.constraintFactor * 100).round()}%',
+                                          style: const TextStyle(
+                                            color: Color(0xFF94A0B8),
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () =>
+                                        onDeleteConstraintZone(index),
+                                    icon: const Icon(Icons.delete_outline),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: selected == null
+                  ? const Center(
+                      child: Text(
+                        'Select a constraint zone to edit it.',
+                        style: TextStyle(color: Color(0xFF94A0B8)),
+                      ),
+                    )
+                  : _ConstraintZoneEditor(
+                      zone: selected,
+                      onChanged: (PlannerConstraintZone zone) =>
+                          onUpdateConstraintZone(
+                            selectedConstraintZoneIndex!,
+                            zone,
+                          ),
+                    ),
             ),
           ),
         ),
@@ -1469,6 +2615,7 @@ class _ObstacleSection extends StatelessWidget {
               child: _FieldEditor(
                 auto: auto,
                 selectedStepIndex: null,
+                playbackProgress: 0,
                 onTap: (_) {},
               ),
             ),
@@ -1700,6 +2847,7 @@ class _AutoGalleryCard extends StatelessWidget {
                     auto: auto,
                     selectedStepIndex: null,
                     mini: true,
+                    playbackProgress: 0,
                   ),
                   child: const SizedBox.expand(),
                 ),
@@ -1833,11 +2981,13 @@ class _FieldEditor extends StatelessWidget {
   const _FieldEditor({
     required this.auto,
     required this.selectedStepIndex,
+    required this.playbackProgress,
     required this.onTap,
   });
 
   final PlannerAuto auto;
   final int? selectedStepIndex;
+  final double playbackProgress;
   final ValueChanged<Offset> onTap;
 
   @override
@@ -1877,6 +3027,7 @@ class _FieldEditor extends StatelessWidget {
                     auto: auto,
                     selectedStepIndex: selectedStepIndex,
                     mini: false,
+                    playbackProgress: playbackProgress,
                   ),
                   child: const SizedBox.expand(),
                 ),
@@ -1894,11 +3045,13 @@ class _FieldPreviewPainter extends CustomPainter {
     required this.auto,
     required this.selectedStepIndex,
     required this.mini,
+    required this.playbackProgress,
   });
 
   final PlannerAuto auto;
   final int? selectedStepIndex;
   final bool mini;
+  final double playbackProgress;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1938,6 +3091,26 @@ class _FieldPreviewPainter extends CustomPainter {
       );
     }
 
+    for (final PlannerConstraintZone zone in auto.constraintZones) {
+      _drawProgressBand(
+        canvas,
+        size,
+        zone.startProgress,
+        zone.endProgress,
+        const Color(0x4459B6F8),
+      );
+    }
+
+    for (final PlannerEventZone zone in auto.eventZones) {
+      _drawProgressBand(
+        canvas,
+        size,
+        zone.startProgress,
+        zone.endProgress,
+        zone.color.withValues(alpha: 0.18),
+      );
+    }
+
     final List<PlannerPose> route = <PlannerPose>[auto.startPose];
     for (final PlannerStep step in auto.steps) {
       route.addAll(step.routeWaypoints);
@@ -1970,6 +3143,24 @@ class _FieldPreviewPainter extends CustomPainter {
       previous = step.pose;
     }
 
+    for (final PlannerEventMarker marker in auto.eventMarkers) {
+      final PlannerPose pose = sampleAutoPoseAtProgress(auto, marker.progress);
+      final Offset point = _toCanvas(pose, size);
+      canvas.drawCircle(
+        point,
+        mini ? 3.5 : 6,
+        Paint()..color = const Color(0xFFFFD166),
+      );
+      canvas.drawCircle(
+        point,
+        mini ? 5.5 : 9,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = mini ? 1 : 1.5
+          ..color = const Color(0x88FFE8AD),
+      );
+    }
+
     _drawRobotBox(
       canvas,
       size,
@@ -1995,6 +3186,16 @@ class _FieldPreviewPainter extends CustomPainter {
         step.pose,
         step.requestedState.color,
         i == selectedStepIndex ? (mini ? 0.6 : 0.92) : (mini ? 0.5 : 0.72),
+      );
+    }
+
+    if (!mini) {
+      _drawRobotBox(
+        canvas,
+        size,
+        sampleAutoPoseAtProgress(auto, playbackProgress),
+        const Color(0xFFE8EEFC),
+        0.94,
       );
     }
   }
@@ -2048,11 +3249,39 @@ class _FieldPreviewPainter extends CustomPainter {
     canvas.restore();
   }
 
+  void _drawProgressBand(
+    Canvas canvas,
+    Size size,
+    double startProgress,
+    double endProgress,
+    Color color,
+  ) {
+    final PlannerPose startPose = sampleAutoPoseAtProgress(
+      auto,
+      math.min(startProgress, endProgress),
+    );
+    final PlannerPose endPose = sampleAutoPoseAtProgress(
+      auto,
+      math.max(startProgress, endProgress),
+    );
+    final Offset start = _toCanvas(startPose, size);
+    final Offset end = _toCanvas(endPose, size);
+    canvas.drawLine(
+      start,
+      end,
+      Paint()
+        ..color = color
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = mini ? 8 : 16,
+    );
+  }
+
   @override
   bool shouldRepaint(covariant _FieldPreviewPainter oldDelegate) {
     return oldDelegate.auto != auto ||
         oldDelegate.selectedStepIndex != selectedStepIndex ||
-        oldDelegate.mini != mini;
+        oldDelegate.mini != mini ||
+        oldDelegate.playbackProgress != playbackProgress;
   }
 }
 
@@ -2280,6 +3509,24 @@ class _SettingsPanel extends StatelessWidget {
                       auto.settings.copyWith(previewSmoothing: value),
                     ),
                   ),
+                  _LabeledSlider(
+                    label: 'Max Velocity MPS',
+                    value: auto.settings.maxVelocityMps,
+                    min: 0.5,
+                    max: 6.0,
+                    onChanged: (double value) => onUpdateSettings(
+                      auto.settings.copyWith(maxVelocityMps: value),
+                    ),
+                  ),
+                  _LabeledSlider(
+                    label: 'Max Accel MPS²',
+                    value: auto.settings.maxAccelerationMpsSq,
+                    min: 0.5,
+                    max: 6.0,
+                    onChanged: (double value) => onUpdateSettings(
+                      auto.settings.copyWith(maxAccelerationMpsSq: value),
+                    ),
+                  ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     value: auto.settings.visionCorrectionEnabled,
@@ -2392,6 +3639,16 @@ class _SettingsPanel extends StatelessWidget {
                           },
                         ),
                         const SizedBox(height: 10),
+                        _LabeledSlider(
+                          label: 'Wait Seconds',
+                          value: selectedStep.waitSeconds,
+                          min: 0,
+                          max: 3,
+                          onChanged: (double value) => onUpdateStep(
+                            selectedStep.copyWith(waitSeconds: value),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
                         Text(
                           'Pose x=${selectedStep.pose.xMeters.toStringAsFixed(2)} y=${selectedStep.pose.yMeters.toStringAsFixed(2)} h=${selectedStep.pose.headingDeg.toStringAsFixed(0)}',
                           style: const TextStyle(color: Color(0xFF94A0B8)),
@@ -2491,6 +3748,233 @@ class _ZoneEditor extends StatelessWidget {
           value: zone.locked,
           title: const Text('Locked'),
           onChanged: (bool value) => onChanged(zone.copyWith(locked: value)),
+        ),
+      ],
+    );
+  }
+}
+
+class _EventMarkerEditor extends StatelessWidget {
+  const _EventMarkerEditor({
+    required this.marker,
+    required this.commandProfiles,
+    required this.onChanged,
+  });
+
+  final PlannerEventMarker marker;
+  final List<PlannerCommandProfile> commandProfiles;
+  final ValueChanged<PlannerEventMarker> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        TextFormField(
+          initialValue: marker.name,
+          decoration: const InputDecoration(labelText: 'Marker Name'),
+          onChanged: (String value) => onChanged(
+            marker.copyWith(name: value.isEmpty ? marker.name : value),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Progress • ${(marker.progress * 100).round()}%',
+          style: const TextStyle(color: Color(0xFF94A0B8)),
+        ),
+        Slider(
+          value: marker.progress.clamp(0.0, 1.0),
+          onChanged: (double value) =>
+              onChanged(marker.copyWith(progress: value)),
+        ),
+        DropdownButtonFormField<String>(
+          initialValue: marker.commandId.isNotEmpty ? marker.commandId : null,
+          decoration: const InputDecoration(labelText: 'Command'),
+          items: commandProfiles
+              .map(
+                (PlannerCommandProfile profile) => DropdownMenuItem<String>(
+                  value: profile.id,
+                  child: Text(profile.name),
+                ),
+              )
+              .toList(),
+          onChanged: (String? value) =>
+              onChanged(marker.copyWith(commandId: value ?? '')),
+        ),
+        const SizedBox(height: 10),
+        TextFormField(
+          initialValue: marker.notes,
+          decoration: const InputDecoration(labelText: 'Notes'),
+          onChanged: (String value) => onChanged(marker.copyWith(notes: value)),
+        ),
+      ],
+    );
+  }
+}
+
+class _EventZoneEditor extends StatelessWidget {
+  const _EventZoneEditor({
+    required this.zone,
+    required this.commandProfiles,
+    required this.onChanged,
+  });
+
+  final PlannerEventZone zone;
+  final List<PlannerCommandProfile> commandProfiles;
+  final ValueChanged<PlannerEventZone> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        TextFormField(
+          initialValue: zone.name,
+          decoration: const InputDecoration(labelText: 'Zone Name'),
+          onChanged: (String value) =>
+              onChanged(zone.copyWith(name: value.isEmpty ? zone.name : value)),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Start • ${(zone.startProgress * 100).round()}%',
+          style: const TextStyle(color: Color(0xFF94A0B8)),
+        ),
+        Slider(
+          value: zone.startProgress.clamp(0.0, 1.0),
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(startProgress: value)),
+        ),
+        Text(
+          'End • ${(zone.endProgress * 100).round()}%',
+          style: const TextStyle(color: Color(0xFF94A0B8)),
+        ),
+        Slider(
+          value: zone.endProgress.clamp(0.0, 1.0),
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(endProgress: value)),
+        ),
+        DropdownButtonFormField<String>(
+          initialValue: zone.enterCommandId.isNotEmpty
+              ? zone.enterCommandId
+              : null,
+          decoration: const InputDecoration(labelText: 'Enter Command'),
+          items: commandProfiles
+              .map(
+                (PlannerCommandProfile profile) => DropdownMenuItem<String>(
+                  value: profile.id,
+                  child: Text(profile.name),
+                ),
+              )
+              .toList(),
+          onChanged: (String? value) =>
+              onChanged(zone.copyWith(enterCommandId: value ?? '')),
+        ),
+        const SizedBox(height: 10),
+        DropdownButtonFormField<String>(
+          initialValue: zone.activeCommandId.isNotEmpty
+              ? zone.activeCommandId
+              : null,
+          decoration: const InputDecoration(labelText: 'While Active Command'),
+          items: commandProfiles
+              .map(
+                (PlannerCommandProfile profile) => DropdownMenuItem<String>(
+                  value: profile.id,
+                  child: Text(profile.name),
+                ),
+              )
+              .toList(),
+          onChanged: (String? value) =>
+              onChanged(zone.copyWith(activeCommandId: value ?? '')),
+        ),
+        const SizedBox(height: 10),
+        DropdownButtonFormField<String>(
+          initialValue: zone.exitCommandId.isNotEmpty
+              ? zone.exitCommandId
+              : null,
+          decoration: const InputDecoration(labelText: 'Exit Command'),
+          items: commandProfiles
+              .map(
+                (PlannerCommandProfile profile) => DropdownMenuItem<String>(
+                  value: profile.id,
+                  child: Text(profile.name),
+                ),
+              )
+              .toList(),
+          onChanged: (String? value) =>
+              onChanged(zone.copyWith(exitCommandId: value ?? '')),
+        ),
+        const SizedBox(height: 10),
+        TextFormField(
+          initialValue: zone.colorHex,
+          decoration: const InputDecoration(labelText: 'Zone Color Hex'),
+          onChanged: (String value) => onChanged(
+            zone.copyWith(colorHex: value.isEmpty ? zone.colorHex : value),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ConstraintZoneEditor extends StatelessWidget {
+  const _ConstraintZoneEditor({required this.zone, required this.onChanged});
+
+  final PlannerConstraintZone zone;
+  final ValueChanged<PlannerConstraintZone> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        TextFormField(
+          initialValue: zone.name,
+          decoration: const InputDecoration(labelText: 'Zone Name'),
+          onChanged: (String value) =>
+              onChanged(zone.copyWith(name: value.isEmpty ? zone.name : value)),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Start • ${(zone.startProgress * 100).round()}%',
+          style: const TextStyle(color: Color(0xFF94A0B8)),
+        ),
+        Slider(
+          value: zone.startProgress.clamp(0.0, 1.0),
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(startProgress: value)),
+        ),
+        Text(
+          'End • ${(zone.endProgress * 100).round()}%',
+          style: const TextStyle(color: Color(0xFF94A0B8)),
+        ),
+        Slider(
+          value: zone.endProgress.clamp(0.0, 1.0),
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(endProgress: value)),
+        ),
+        _LabeledSlider(
+          label: 'Max Velocity MPS',
+          value: zone.maxVelocityMps,
+          min: 0.5,
+          max: 5.5,
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(maxVelocityMps: value)),
+        ),
+        _LabeledSlider(
+          label: 'Max Accel MPS²',
+          value: zone.maxAccelerationMpsSq,
+          min: 0.5,
+          max: 5.0,
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(maxAccelerationMpsSq: value)),
+        ),
+        _LabeledSlider(
+          label: 'Constraint Factor',
+          value: zone.constraintFactor,
+          min: 0.2,
+          max: 1.0,
+          onChanged: (double value) =>
+              onChanged(zone.copyWith(constraintFactor: value)),
         ),
       ],
     );

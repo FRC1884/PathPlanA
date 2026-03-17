@@ -80,6 +80,98 @@
         }
       }
     },
+    "eventMarker": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "progress"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "progress": {
+          "type": "number"
+        },
+        "commandId": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "eventZone": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "startProgress",
+        "endProgress"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startProgress": {
+          "type": "number"
+        },
+        "endProgress": {
+          "type": "number"
+        },
+        "enterCommandId": {
+          "type": "string"
+        },
+        "exitCommandId": {
+          "type": "string"
+        },
+        "activeCommandId": {
+          "type": "string"
+        },
+        "colorHex": {
+          "type": "string"
+        }
+      }
+    },
+    "constraintZone": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "startProgress",
+        "endProgress"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startProgress": {
+          "type": "number"
+        },
+        "endProgress": {
+          "type": "number"
+        },
+        "maxVelocityMps": {
+          "type": "number"
+        },
+        "maxAccelerationMpsSq": {
+          "type": "number"
+        },
+        "constraintFactor": {
+          "type": "number"
+        }
+      }
+    },
     "step": {
       "type": "object",
       "required": [
@@ -95,6 +187,9 @@
         },
         "commandName": {
           "type": "string"
+        },
+        "waitSeconds": {
+          "type": "number"
         },
         "label": {
           "type": "string"
@@ -192,6 +287,24 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/zone"
+          }
+        },
+        "eventMarkers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/eventMarker"
+          }
+        },
+        "eventZones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/eventZone"
+          }
+        },
+        "constraintZones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/constraintZone"
           }
         },
         "plannerSettings": {
