@@ -163,7 +163,8 @@ class PlannerCommandProfile {
   final String description;
 
   Color get color =>
-      parseHexColor(colorHex) ?? requestedStateColor(requestedState);
+      parseHexColor(colorHex) ??
+      fallbackCommandColor(id.isNotEmpty ? id : name);
 
   PlannerCommandProfile copyWith({
     String? id,
@@ -202,6 +203,27 @@ class PlannerCommandProfile {
 
 Color requestedStateColor(String stateToken) {
   return RequestedState.fromToken(stateToken).color;
+}
+
+Color fallbackCommandColor(String seed) {
+  const List<Color> palette = <Color>[
+    Color(0xFFE8EEFC),
+    Color(0xFF39D98A),
+    Color(0xFFFFD166),
+    Color(0xFF90CDF4),
+    Color(0xFFFF8C69),
+    Color(0xFFF78FB3),
+    Color(0xFF8BD3FF),
+    Color(0xFFB794F4),
+  ];
+  if (seed.isEmpty) {
+    return palette.first;
+  }
+  int hash = 0;
+  for (final int codeUnit in seed.codeUnits) {
+    hash = (hash * 31 + codeUnit) & 0x7fffffff;
+  }
+  return palette[hash % palette.length];
 }
 
 Color? parseHexColor(String value) {
@@ -348,6 +370,101 @@ List<PlannerPose> buildAutoRoutePoints(PlannerAuto auto) {
   return points;
 }
 
+List<double> buildAutoRouteBendStrengths(PlannerAuto auto) {
+  final List<double> strengths = <double>[0.65];
+  for (final PlannerStep step in auto.steps) {
+    strengths.addAll(
+      step.routeWaypoints.map((PlannerWaypoint waypoint) => waypoint.bendStrength),
+    );
+    strengths.add(0.65);
+  }
+  return strengths;
+}
+
+PlannerPose _cubicBezierPose(
+  PlannerPose p0,
+  PlannerPose p1,
+  PlannerPose p2,
+  PlannerPose p3,
+  double t,
+) {
+  final double u = 1 - t;
+  final double tt = t * t;
+  final double uu = u * u;
+  final double uuu = uu * u;
+  final double ttt = tt * t;
+  return PlannerPose(
+    xMeters:
+        (uuu * p0.xMeters) +
+        (3 * uu * t * p1.xMeters) +
+        (3 * u * tt * p2.xMeters) +
+        (ttt * p3.xMeters),
+    yMeters:
+        (uuu * p0.yMeters) +
+        (3 * uu * t * p1.yMeters) +
+        (3 * u * tt * p2.yMeters) +
+        (ttt * p3.yMeters),
+    headingDeg:
+        (uuu * p0.headingDeg) +
+        (3 * uu * t * p1.headingDeg) +
+        (3 * u * tt * p2.headingDeg) +
+        (ttt * p3.headingDeg),
+  );
+}
+
+List<PlannerPose> buildSmoothedRoutePoints(
+  List<PlannerPose> controlPoints,
+  List<double> bendStrengths, {
+  int samplesPerSegment = 18,
+}) {
+  if (controlPoints.length <= 2) {
+    return controlPoints;
+  }
+  final List<PlannerPose> sampled = <PlannerPose>[controlPoints.first];
+  for (int i = 0; i < controlPoints.length - 1; i += 1) {
+    final PlannerPose p0 = i == 0 ? controlPoints[i] : controlPoints[i - 1];
+    final PlannerPose p1 = controlPoints[i];
+    final PlannerPose p2 = controlPoints[i + 1];
+    final PlannerPose p3 = i + 2 < controlPoints.length
+        ? controlPoints[i + 2]
+        : controlPoints[i + 1];
+    final double handleScale =
+        (((bendStrengths[i] + bendStrengths[i + 1]) / 2) * 1.35).clamp(
+          0.1,
+          1.6,
+        );
+    final PlannerPose c1 = PlannerPose(
+      xMeters: p1.xMeters + (((p2.xMeters - p0.xMeters) / 6) * handleScale),
+      yMeters: p1.yMeters + (((p2.yMeters - p0.yMeters) / 6) * handleScale),
+      headingDeg:
+          p1.headingDeg + (((p2.headingDeg - p0.headingDeg) / 6) * handleScale),
+    );
+    final PlannerPose c2 = PlannerPose(
+      xMeters: p2.xMeters - (((p3.xMeters - p1.xMeters) / 6) * handleScale),
+      yMeters: p2.yMeters - (((p3.yMeters - p1.yMeters) / 6) * handleScale),
+      headingDeg:
+          p2.headingDeg - (((p3.headingDeg - p1.headingDeg) / 6) * handleScale),
+    );
+    for (int sample = 1; sample <= samplesPerSegment; sample += 1) {
+      sampled.add(
+        _cubicBezierPose(p1, c1, c2, p2, sample / samplesPerSegment),
+      );
+    }
+  }
+  return sampled;
+}
+
+List<PlannerPose> buildSmoothedAutoRoutePoints(
+  PlannerAuto auto, {
+  int samplesPerSegment = 18,
+}) {
+  return buildSmoothedRoutePoints(
+    buildAutoRoutePoints(auto),
+    buildAutoRouteBendStrengths(auto),
+    samplesPerSegment: samplesPerSegment,
+  );
+}
+
 PlannerPose resolvePointPose(
   PlannerAuto auto, {
   required bool startPoseSelected,
@@ -449,7 +566,10 @@ String describePointRef(PlannerAuto auto, PlannerWaypointRef ref) {
 }
 
 double computeAutoDistanceMeters(PlannerAuto auto) {
-  final List<PlannerPose> points = buildAutoRoutePoints(auto);
+  final List<PlannerPose> points = buildSmoothedAutoRoutePoints(
+    auto,
+    samplesPerSegment: 20,
+  );
   double total = 0;
   for (int i = 1; i < points.length; i += 1) {
     total += poseDistanceMeters(points[i - 1], points[i]);
@@ -505,7 +625,10 @@ PlannerPointConstraintProfile? _profileForPose(PlannerAuto auto, PlannerPose pos
 }
 
 double computeEstimatedTimeSeconds(PlannerAuto auto) {
-  final List<PlannerPose> points = buildAutoRoutePoints(auto);
+  final List<PlannerPose> points = buildSmoothedAutoRoutePoints(
+    auto,
+    samplesPerSegment: 20,
+  );
   if (points.length < 2) {
     return 0;
   }
@@ -547,7 +670,10 @@ double computeEstimatedTimeSeconds(PlannerAuto auto) {
 }
 
 PlannerPose sampleAutoPoseAtProgress(PlannerAuto auto, double progress) {
-  final List<PlannerPose> points = buildAutoRoutePoints(auto);
+  final List<PlannerPose> points = buildSmoothedAutoRoutePoints(
+    auto,
+    samplesPerSegment: 22,
+  );
   if (points.isEmpty) {
     return const PlannerPose(xMeters: 0, yMeters: 0, headingDeg: 0);
   }
@@ -2786,9 +2912,7 @@ class _PlannerHomePageState extends State<PlannerHomePage>
           PlannerStep(
             id: 'step-${DateTime.now().microsecondsSinceEpoch}',
             label: 'Step ${_selectedAuto.steps.length + 1}',
-            requestedState: RequestedState.fromToken(
-              _draftCommand.requestedState,
-            ),
+            requestedState: RequestedState.idling,
             pose: pose,
             group: 'LANE',
             commandId: _draftCommand.id,
@@ -4021,6 +4145,7 @@ class _EditorSection extends StatelessWidget {
                                 flex: 6,
                                 child: _FieldEditor(
                                   auto: auto,
+                                  commandProfiles: commandProfiles,
                                   tool: tool,
                                   startPoseSelected: startPoseSelected,
                                   selectedStepIndex: selectedStepIndex,
@@ -4082,6 +4207,7 @@ class _EditorSection extends StatelessWidget {
             onUpdateStep: onUpdateStep,
             onUpdateEventMarker: onUpdateEventMarker,
             onDeleteEventMarker: onDeleteEventMarker,
+            onAddEventMarker: onAddEventMarker,
             onDeleteSelectedPoint: onDeleteSelectedPoint,
             onOpenSettings: onOpenSettings,
           ),
@@ -4475,6 +4601,7 @@ class _EditorInspector extends StatelessWidget {
     required this.onUpdateStep,
     required this.onUpdateEventMarker,
     required this.onDeleteEventMarker,
+    required this.onAddEventMarker,
     required this.onDeleteSelectedPoint,
     required this.onOpenSettings,
   });
@@ -4500,6 +4627,7 @@ class _EditorInspector extends StatelessWidget {
   final ValueChanged<PlannerStep> onUpdateStep;
   final void Function(int index, PlannerEventMarker marker) onUpdateEventMarker;
   final ValueChanged<int> onDeleteEventMarker;
+  final VoidCallback onAddEventMarker;
   final VoidCallback onDeleteSelectedPoint;
   final VoidCallback onOpenSettings;
 
@@ -4931,23 +5059,45 @@ class _EditorInspector extends StatelessWidget {
                     ),
                     const SizedBox(height: 10),
                     if (selectedMarkers.isEmpty)
-                      const Text(
-                        'No point markers on this point yet. Use the Marker button in the toolbar to add one to the current selection.',
-                        style: TextStyle(color: Color(0xFF94A0B8)),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          const Text(
+                            'No point markers on this point yet.',
+                            style: TextStyle(color: Color(0xFF94A0B8)),
+                          ),
+                          const SizedBox(height: 10),
+                          FilledButton.tonalIcon(
+                            onPressed: onAddEventMarker,
+                            icon: const Icon(Icons.add_location_alt_outlined),
+                            label: const Text('Attach Marker To This Point'),
+                          ),
+                        ],
                       )
                     else
-                      ...selectedMarkers.map(
-                        (MapEntry<int, PlannerEventMarker> entry) =>
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: _PointEventMarkerEditor(
-                                marker: entry.value,
-                                commandProfiles: commandProfiles,
-                                onChanged: (PlannerEventMarker next) =>
-                                    onUpdateEventMarker(entry.key, next),
-                                onDelete: () => onDeleteEventMarker(entry.key),
-                              ),
-                            ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          ...selectedMarkers.map(
+                            (MapEntry<int, PlannerEventMarker> entry) =>
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  child: _PointEventMarkerEditor(
+                                    marker: entry.value,
+                                    commandProfiles: commandProfiles,
+                                    onChanged: (PlannerEventMarker next) =>
+                                        onUpdateEventMarker(entry.key, next),
+                                    onDelete: () =>
+                                        onDeleteEventMarker(entry.key),
+                                  ),
+                                ),
+                          ),
+                          FilledButton.tonalIcon(
+                            onPressed: onAddEventMarker,
+                            icon: const Icon(Icons.add_location_alt_outlined),
+                            label: const Text('Add Another Marker'),
+                          ),
+                        ],
                       ),
                   ],
                 ),
@@ -5096,6 +5246,7 @@ class _EventsSection extends StatelessWidget {
                     height: 220,
                     child: _FieldEditor(
                       auto: auto,
+                      commandProfiles: commandProfiles,
                       tool: PlannerTool.select,
                       startPoseSelected: false,
                       selectedStepIndex: null,
@@ -5435,6 +5586,7 @@ class _ObstacleSection extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: _FieldEditor(
                 auto: auto,
+                commandProfiles: const <PlannerCommandProfile>[],
                 tool: PlannerTool.select,
                 startPoseSelected: false,
                 selectedStepIndex: null,
@@ -5694,6 +5846,7 @@ class _AutoGalleryCard extends StatelessWidget {
                     CustomPaint(
                       painter: _FieldPreviewPainter(
                         auto: auto,
+                        commandProfiles: const <PlannerCommandProfile>[],
                         startPoseSelected: false,
                         selectedStepIndex: null,
                         selectedWaypointRef: null,
@@ -5911,6 +6064,7 @@ class _FieldDragTarget {
 class _FieldEditor extends StatefulWidget {
   const _FieldEditor({
     required this.auto,
+    required this.commandProfiles,
     required this.tool,
     required this.startPoseSelected,
     required this.selectedStepIndex,
@@ -5933,6 +6087,7 @@ class _FieldEditor extends StatefulWidget {
   });
 
   final PlannerAuto auto;
+  final List<PlannerCommandProfile> commandProfiles;
   final PlannerTool tool;
   final bool startPoseSelected;
   final int? selectedStepIndex;
@@ -6437,6 +6592,7 @@ class _FieldEditorState extends State<_FieldEditor> {
                 CustomPaint(
                   painter: _FieldPreviewPainter(
                     auto: widget.auto,
+                    commandProfiles: widget.commandProfiles,
                     startPoseSelected: widget.startPoseSelected,
                     selectedStepIndex: widget.selectedStepIndex,
                     selectedWaypointRef: widget.selectedWaypointRef,
@@ -6484,6 +6640,7 @@ class _FieldEditorState extends State<_FieldEditor> {
 class _FieldPreviewPainter extends CustomPainter {
   _FieldPreviewPainter({
     required this.auto,
+    required this.commandProfiles,
     required this.startPoseSelected,
     required this.selectedStepIndex,
     required this.selectedWaypointRef,
@@ -6494,6 +6651,7 @@ class _FieldPreviewPainter extends CustomPainter {
   });
 
   final PlannerAuto auto;
+  final List<PlannerCommandProfile> commandProfiles;
   final bool startPoseSelected;
   final int? selectedStepIndex;
   final PlannerWaypointRef? selectedWaypointRef;
@@ -6622,30 +6780,37 @@ class _FieldPreviewPainter extends CustomPainter {
       );
     }
 
-    final List<PlannerPose> route = <PlannerPose>[auto.startPose];
-    for (final PlannerStep step in auto.steps) {
-      route.addAll(
-        step.routeWaypoints.map((PlannerWaypoint waypoint) => waypoint.pose),
-      );
-      route.add(step.pose);
-    }
-
     PlannerPose previous = auto.startPose;
     for (int i = 0; i < auto.steps.length; i += 1) {
       final PlannerStep step = auto.steps[i];
+      final PlannerCommandProfile? profile = findCommandProfileById(
+        commandProfiles,
+        step.commandId,
+      );
+      final Color stepColor = profile?.color ?? const Color(0xFFE8EEFC);
       final List<PlannerPose> segment = <PlannerPose>[
         previous,
         ...step.routeWaypoints.map((PlannerWaypoint waypoint) => waypoint.pose),
         step.pose,
       ];
+      final List<double> bendStrengths = <double>[
+        0.65,
+        ...step.routeWaypoints.map((PlannerWaypoint waypoint) => waypoint.bendStrength),
+        0.65,
+      ];
+      final List<PlannerPose> smoothedSegment = buildSmoothedRoutePoints(
+        segment,
+        bendStrengths,
+        samplesPerSegment: mini ? 8 : 18,
+      );
       final Paint pathPaint = Paint()
-        ..color = step.requestedState.color
+        ..color = stepColor
         ..strokeWidth = mini ? 1.8 : 3.2
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke;
       final Path path = Path();
-      for (int j = 0; j < segment.length; j += 1) {
-        final Offset point = _toCanvas(segment[j], fieldRect);
+      for (int j = 0; j < smoothedSegment.length; j += 1) {
+        final Offset point = _toCanvas(smoothedSegment[j], fieldRect);
         if (j == 0) {
           path.moveTo(point.dx, point.dy);
         } else {
@@ -6681,12 +6846,20 @@ class _FieldPreviewPainter extends CustomPainter {
 
     for (int i = 0; i < auto.steps.length; i += 1) {
       final PlannerStep step = auto.steps[i];
-      for (final PlannerWaypoint waypoint in step.routeWaypoints) {
+      final PlannerCommandProfile? profile = findCommandProfileById(
+        commandProfiles,
+        step.commandId,
+      );
+      final Color stepColor = profile?.color ?? const Color(0xFFE8EEFC);
+      for (int waypointIndex = 0;
+          waypointIndex < step.routeWaypoints.length;
+          waypointIndex += 1) {
+        final PlannerWaypoint waypoint = step.routeWaypoints[waypointIndex];
         _drawRobotBox(
           canvas,
           fieldRect,
           waypoint.pose,
-          step.requestedState.color,
+          stepColor,
           mini ? 0.35 : 0.48,
         );
         _drawPointBadges(
@@ -6699,23 +6872,20 @@ class _FieldPreviewPainter extends CustomPainter {
                     marker.targetType ==
                         PlannerEventMarkerTargetType.routeWaypoint &&
                     marker.stepIndex == i &&
-                    marker.routeWaypointIndex == step.routeWaypoints.indexOf(
-                      waypoint,
-                    ),
+                    marker.routeWaypointIndex == waypointIndex,
               )
               .length,
           hasConstraints: waypoint.constraintProfile.hasAnyValues,
           selected:
               selectedWaypointRef?.stepIndex == i &&
-              selectedWaypointRef?.routeWaypointIndex ==
-                  step.routeWaypoints.indexOf(waypoint),
+              selectedWaypointRef?.routeWaypointIndex == waypointIndex,
         );
       }
       _drawRobotBox(
         canvas,
         fieldRect,
         step.pose,
-        step.requestedState.color,
+        stepColor,
         i == selectedStepIndex ? (mini ? 0.6 : 0.92) : (mini ? 0.5 : 0.72),
       );
       _drawPointBadges(
@@ -6828,6 +6998,7 @@ class _FieldPreviewPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _FieldPreviewPainter oldDelegate) {
     return oldDelegate.auto != auto ||
+        oldDelegate.commandProfiles != commandProfiles ||
         oldDelegate.startPoseSelected != startPoseSelected ||
         oldDelegate.selectedStepIndex != selectedStepIndex ||
         oldDelegate.selectedWaypointRef != selectedWaypointRef ||
@@ -7035,10 +7206,10 @@ class _StepListPanel extends StatelessWidget {
                           }
                         }
                         final Color stepColor =
-                            profile?.color ?? step.requestedState.color;
+                            profile?.color ?? const Color(0xFFE8EEFC);
                         final String stepName = step.commandName.isNotEmpty
                             ? step.commandName
-                            : profile?.name ?? step.requestedState.token;
+                            : profile?.name ?? 'No Command';
                         return Material(
                           color: index == selectedStepIndex
                               ? stepColor.withValues(alpha: 0.12)
@@ -7321,9 +7492,7 @@ class _SettingsPanel extends StatelessWidget {
                                   PlannerCommandProfile profile,
                                 ) => DropdownMenuItem<String>(
                                   value: profile.id,
-                                  child: Text(
-                                    '${profile.name} → ${profile.requestedState}',
-                                  ),
+                                  child: Text(profile.name),
                                 ),
                               )
                               .toList(),
@@ -7339,9 +7508,7 @@ class _SettingsPanel extends StatelessWidget {
                                 selectedStep.copyWith(
                                   commandId: profile.id,
                                   commandName: profile.name,
-                                  requestedState: RequestedState.fromToken(
-                                    profile.requestedState,
-                                  ),
+                                  requestedState: RequestedState.idling,
                                 ),
                               );
                             }
@@ -7975,31 +8142,13 @@ class _CommandProfileCard extends StatelessWidget {
             Row(
               children: <Widget>[
                 Expanded(
-                  child: DropdownButtonFormField<RequestedState>(
-                    initialValue: RequestedState.fromToken(
-                      profile.requestedState,
+                  child: TextFormField(
+                    key: ValueKey<String>('command-id-${profile.id}'),
+                    initialValue: profile.id,
+                    decoration: const InputDecoration(
+                      labelText: 'Command Id',
                     ),
-                    decoration: const InputDecoration(labelText: 'Robot State'),
-                    items: RequestedState.values
-                        .map(
-                          (RequestedState state) =>
-                              DropdownMenuItem<RequestedState>(
-                                value: state,
-                                child: Text(state.token),
-                              ),
-                        )
-                        .toList(),
-                    onChanged: (RequestedState? state) {
-                      if (state == null) {
-                        return;
-                      }
-                      onChanged(
-                        profile.copyWith(
-                          requestedState: state.token,
-                          colorHex: colorToHex(state.color),
-                        ),
-                      );
-                    },
+                    readOnly: true,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -8016,6 +8165,14 @@ class _CommandProfileCard extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Named commands are referenced by id from waypoints, anchors, and event markers.',
+                style: TextStyle(color: Color(0xFF94A0B8), fontSize: 12),
+              ),
             ),
             const SizedBox(height: 10),
             TextFormField(
